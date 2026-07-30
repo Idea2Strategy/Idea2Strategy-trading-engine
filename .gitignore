@@ -1,0 +1,15 @@
+.gradle/
+build/
+**/build/
+out/
+*.class
+.idea/
+*.iml
+.vscode/
+.env
+.env.*
+!.env.example
+logs/
+*.log
+.harness/local/
+
