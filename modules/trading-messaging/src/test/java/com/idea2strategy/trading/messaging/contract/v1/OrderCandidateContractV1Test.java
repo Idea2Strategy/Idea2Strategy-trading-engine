@@ -25,6 +25,30 @@ class OrderCandidateContractV1Test {
             .containsExactly(ACCEPTED, REDUCED, REJECTED);
         assertThat(intents.intents()).extracting(OrderExecutionContractV1.Intent::candidateId)
             .allMatch(id -> candidates.candidates().stream().anyMatch(candidate -> candidate.candidateId().equals(id)));
+        assertThat(intents.intents()).allSatisfy(intent -> {
+            var candidate = candidates.candidates().stream()
+                .filter(value -> value.candidateId().equals(intent.candidateId()))
+                .findFirst()
+                .orElseThrow();
+            assertThat(intent.side()).isEqualTo(candidate.side());
+            assertThat(intent.instrumentId()).isEqualTo(candidate.instrumentId());
+        });
+    }
+
+    @Test
+    void candidateAndIntentFixturesUseCanonicalIdentityTimeAndCostPolicy() {
+        var candidateEnvelope = ContractFixturesV1.candidateBatchEnvelope();
+        var intentEnvelope = ContractFixturesV1.intentBatchEnvelope();
+
+        assertThat(candidateEnvelope.eventId()).isEqualTo(id("00000000-0000-0000-0000-000000000201"));
+        assertThat(intentEnvelope.eventId()).isEqualTo(id("00000000-0000-0000-0000-000000000301"));
+        assertThat(candidateEnvelope.occurredAt()).hasToString("2026-07-31T14:30:00Z");
+        assertThat(intentEnvelope.occurredAt()).hasToString("2026-07-31T14:30:00Z");
+        assertThat(intentEnvelope.payload().intents()).allSatisfy(intent -> {
+            assertThat(intent.costPolicy().version()).isEqualTo("virtual-fill-cost-v1");
+            assertThat(intent.costPolicy().feeRate().value()).isEqualTo("0.002");
+            assertThat(intent.costPolicy().slippageRate().value()).isEqualTo("0.0005");
+        });
     }
 
     @Test

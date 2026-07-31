@@ -6,6 +6,7 @@ import com.idea2strategy.trading.messaging.contract.v1.TradingEnvelopeV1;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -29,14 +30,16 @@ public final class FixtureDeliveryProjectionV1 {
             return DeliveryResult.STALE;
         }
         if (envelope.aggregateVersion() != latestVersion + 1) {
-            throw new IllegalStateException("aggregate version gap");
+            throw new IllegalStateException("aggregate version gap: sequence gap");
         }
 
         appliedEventIds.add(envelope.eventId());
         latestVersionByAggregate.put(envelope.aggregateId(), envelope.aggregateVersion());
         if (envelope.payload() instanceof OrderLifecycleContractV1.Event event) {
-            tradeCount++;
-            ledgerEntryCount += event.ledgerTransaction().entries().size();
+            if (event.ledgerTransaction() != null) {
+                tradeCount++;
+                ledgerEntryCount += event.ledgerTransaction().entries().size();
+            }
         }
         return DeliveryResult.APPLIED;
     }
@@ -47,5 +50,21 @@ public final class FixtureDeliveryProjectionV1 {
 
     public int ledgerEntryCount() {
         return ledgerEntryCount;
+    }
+
+    public record DeliveryScenario(
+        List<UUID> deliveryEventIds,
+        int expectedTradeCount,
+        int expectedLedgerEntryCount,
+        DeliveryResult duplicateResult,
+        DeliveryResult staleResult,
+        String gapError
+    ) {
+        public DeliveryScenario {
+            deliveryEventIds = List.copyOf(ContractValidationV1.required(deliveryEventIds, "deliveryEventIds"));
+            ContractValidationV1.required(duplicateResult, "duplicateResult");
+            ContractValidationV1.required(staleResult, "staleResult");
+            ContractValidationV1.requiredText(gapError, "gapError");
+        }
     }
 }

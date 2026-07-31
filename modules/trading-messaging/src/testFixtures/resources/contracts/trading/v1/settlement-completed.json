@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "trading.v1",
+  "eventType": "settlement.completed",
+  "eventId": "00000000-0000-0000-0000-000000000702",
+  "occurredAt": "2026-07-31T14:30:00Z",
+  "producer": "trading-worker",
+  "correlationId": "00000000-0000-0000-0000-000000000801",
+  "causationId": "00000000-0000-0000-0000-000000000802",
+  "idempotencyKey": "settlement-completed-00000000-0000-0000-0000-000000000701",
+  "aggregateId": "00000000-0000-0000-0000-000000000701",
+  "aggregateVersion": 1,
+  "payload": {
+    "settlementId": "00000000-0000-0000-0000-000000000701",
+    "botId": "00000000-0000-0000-0000-000000000101",
+    "type": "COMPLETED",
+    "reasonCode": null,
+    "attempt": 1,
+    "affectedOrderIds": ["00000000-0000-0000-0000-000000000401"]
+  }
+}

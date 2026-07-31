@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "trading.v1",
+  "eventType": "order.cancelled",
+  "eventId": "00000000-0000-0000-0000-000000000503",
+  "occurredAt": "2026-07-31T14:30:00Z",
+  "producer": "trading-worker",
+  "correlationId": "00000000-0000-0000-0000-000000000801",
+  "causationId": "00000000-0000-0000-0000-000000000802",
+  "idempotencyKey": "cancelled-00000000-0000-0000-0000-000000000503",
+  "aggregateId": "00000000-0000-0000-0000-000000000401",
+  "aggregateVersion": 3,
+  "payload": { "orderId": "00000000-0000-0000-0000-000000000401", "type": "CANCELLED", "fillQuantity": null, "fillPrice": null, "ledgerTransaction": null, "reasonCode": "USER_REQUESTED" }
+}
