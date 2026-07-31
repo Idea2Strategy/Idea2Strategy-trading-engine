@@ -15,7 +15,6 @@ import java.util.UUID;
 public final class ContractJsonFixtureLoaderV1 {
     private static final String RESOURCE_DIRECTORY = "contracts/trading/v1/";
     private static final List<String> ENVELOPE_RESOURCES = List.of(
-        "candidate-batch.json",
         "intent-batch.json",
         "order-accepted.json",
         "order-partial-fill.json",
@@ -36,7 +35,11 @@ public final class ContractJsonFixtureLoaderV1 {
     }
 
     public static <T> T read(String resource, TypeReference<T> type) {
-        try (InputStream input = resource(resource)) {
+        return readResource(RESOURCE_DIRECTORY + resource, type);
+    }
+
+    public static <T> T readResource(String resource, TypeReference<T> type) {
+        try (InputStream input = resourceAt(resource)) {
             return mapper().readValue(input, type);
         } catch (IOException exception) {
             throw new UncheckedIOException("unable to read canonical JSON fixture " + resource, exception);
@@ -45,7 +48,7 @@ public final class ContractJsonFixtureLoaderV1 {
 
     public static boolean roundTrips(String resource, TypeReference<?> type) {
         Object value = read(resource, type);
-        try (InputStream input = resource(resource)) {
+        try (InputStream input = resourceAt(RESOURCE_DIRECTORY + resource)) {
             JsonNode source = mapper().readTree(input);
             JsonNode serialized = mapper().readTree(mapper().writeValueAsBytes(value));
             return source.equals(serialized);
@@ -61,8 +64,8 @@ public final class ContractJsonFixtureLoaderV1 {
             .toList();
     }
 
-    private static InputStream resource(String name) {
-        InputStream input = ContractJsonFixtureLoaderV1.class.getClassLoader().getResourceAsStream(RESOURCE_DIRECTORY + name);
+    private static InputStream resourceAt(String name) {
+        InputStream input = ContractJsonFixtureLoaderV1.class.getClassLoader().getResourceAsStream(name);
         if (input == null) {
             throw new IllegalArgumentException("canonical JSON fixture not found: " + name);
         }

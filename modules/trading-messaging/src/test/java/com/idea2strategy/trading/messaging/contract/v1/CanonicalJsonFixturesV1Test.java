@@ -36,14 +36,12 @@ class CanonicalJsonFixturesV1Test {
     void canonicalEnvelopeEventIdsAreUnique() {
         var eventIds = ContractJsonFixtureLoaderV1.canonicalEnvelopeEventIds();
 
-        assertThat(eventIds).hasSize(9);
+        assertThat(eventIds).hasSize(8);
         assertThat(new HashSet<>(eventIds)).hasSameSizeAs(eventIds);
     }
 
     @Test
     void canonicalResourcesMatchDeterministicJavaFixtures() {
-        assertThat(read("candidate-batch.json", new TypeReference<TradingEnvelopeV1<OrderCandidateContractV1.CandidateBatch>>() {}))
-            .isEqualTo(ContractFixturesV1.candidateBatchEnvelope());
         assertThat(read("intent-batch.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {}))
             .isEqualTo(ContractFixturesV1.intentBatchEnvelope());
         assertThat(read("order-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}))
@@ -66,7 +64,6 @@ class CanonicalJsonFixturesV1Test {
 
     static Stream<Arguments> canonicalFixtures() {
         return Stream.of(
-            Arguments.of("candidate-batch.json", new TypeReference<TradingEnvelopeV1<OrderCandidateContractV1.CandidateBatch>>() {}),
             Arguments.of("intent-batch.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {}),
             Arguments.of("order-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
             Arguments.of("order-partial-fill.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),

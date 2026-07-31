@@ -3,12 +3,15 @@ package com.idea2strategy.trading.messaging.fixture.v1;
 import com.idea2strategy.trading.messaging.contract.v1.CurrencyAmountV1;
 import com.idea2strategy.trading.messaging.contract.v1.DecimalValueV1;
 import com.idea2strategy.trading.messaging.contract.v1.LedgerContractV1;
-import com.idea2strategy.trading.messaging.contract.v1.OrderCandidateContractV1;
 import com.idea2strategy.trading.messaging.contract.v1.OrderExecutionContractV1;
 import com.idea2strategy.trading.messaging.contract.v1.OrderLifecycleContractV1;
 import com.idea2strategy.trading.messaging.contract.v1.SettlementContractV1;
 import com.idea2strategy.trading.messaging.contract.v1.TradingEnvelopeV1;
+import com.idea2strategy.trading.messaging.evaluation.OrderCandidate;
+import com.idea2strategy.trading.messaging.evaluation.OrderCandidateBatch;
+import com.idea2strategy.trading.messaging.evaluation.OrderSide;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -41,16 +44,32 @@ public final class ContractFixturesV1 {
     private ContractFixturesV1() {
     }
 
-    public static TradingEnvelopeV1<OrderCandidateContractV1.CandidateBatch> candidateBatchEnvelope() {
-        var candidateBatch = new OrderCandidateContractV1.CandidateBatch(
-            CANDIDATE_BATCH_ID, BOT_ID, STRATEGY_VERSION_ID, EVALUATION_ID, "2026-07-31-us-equities",
+    public static OrderCandidateBatch candidateBatch() {
+        return new OrderCandidateBatch(
+            1, CANDIDATE_BATCH_ID, EVALUATION_ID, FIXTURE_TIME,
             List.of(
-                candidate("00000000-0000-0000-0000-000000000211", OrderExecutionContractV1.Side.BUY, "0.5", "MOMENTUM_SIGNAL"),
-                candidate("00000000-0000-0000-0000-000000000212", OrderExecutionContractV1.Side.BUY, "0.35", "RISK_ADJUSTED"),
-                candidate("00000000-0000-0000-0000-000000000213", OrderExecutionContractV1.Side.SELL, "0.15", "REBALANCE_SIGNAL")
+                candidate("00000000-0000-0000-0000-000000000211", OrderSide.BUY, "10.5", null, "MOMENTUM_SIGNAL"),
+                candidate("00000000-0000-0000-0000-000000000212", OrderSide.BUY, "20", null, "RISK_ADJUSTED"),
+                candidate("00000000-0000-0000-0000-000000000213", OrderSide.SELL, "5", null, "REBALANCE_SIGNAL")
             )
         );
-        return envelope("order.candidate-batch", CANDIDATE_BATCH_ID, "candidate-batch-" + CANDIDATE_BATCH_ID, CANDIDATE_BATCH_ID, 1, candidateBatch);
+    }
+
+    public static TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch> intentBatchFor(OrderCandidateBatch candidates) {
+        var intents = candidates.candidates().stream()
+            .map(candidate -> new OrderExecutionContractV1.Intent(
+                UUID.nameUUIDFromBytes(("intent-" + candidate.candidateId()).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                candidate.candidateId(), candidate.instrumentId(), side(candidate.side()),
+                candidate.limitPrice() == null ? OrderExecutionContractV1.OrderType.MARKET : OrderExecutionContractV1.OrderType.LIMIT,
+                OrderExecutionContractV1.TimeInForce.DAY, null, OrderExecutionContractV1.QuantityMode.WHOLE_SHARES,
+                decimal(candidate.quantity()), decimal(candidate.quantity()), OrderExecutionContractV1.IntentDecision.ACCEPTED,
+                null, costPolicy()
+            ))
+            .toList();
+        return envelope(
+            "order.intent-batch", INTENT_BATCH_ID, "intent-batch-" + candidates.batchId(), INTENT_BATCH_ID, 1,
+            new OrderExecutionContractV1.IntentBatch(INTENT_BATCH_ID, BOT_ID, candidates.evaluationId(), intents)
+        );
     }
 
     public static TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch> intentBatchEnvelope() {
@@ -132,8 +151,19 @@ public final class ContractFixturesV1 {
         return new OrderExecutionContractV1.CostPolicy(COST_POLICY_VERSION, new DecimalValueV1("0.002"), new DecimalValueV1("0.0005"));
     }
 
-    private static OrderCandidateContractV1.Candidate candidate(String candidateId, OrderExecutionContractV1.Side side, String requestedWeight, String reasonCode) {
-        return new OrderCandidateContractV1.Candidate(UUID.fromString(candidateId), INSTRUMENT_ID, side, new DecimalValueV1(requestedWeight), reasonCode);
+    private static OrderCandidate candidate(String candidateId, OrderSide side, String quantity, String limitPrice, String reasonCode) {
+        return new OrderCandidate(
+            UUID.fromString(candidateId), INSTRUMENT_ID, side, new BigDecimal(quantity),
+            limitPrice == null ? null : new BigDecimal(limitPrice), List.of(reasonCode)
+        );
+    }
+
+    private static OrderExecutionContractV1.Side side(OrderSide side) {
+        return side == OrderSide.BUY ? OrderExecutionContractV1.Side.BUY : OrderExecutionContractV1.Side.SELL;
+    }
+
+    private static DecimalValueV1 decimal(BigDecimal value) {
+        return new DecimalValueV1(value.stripTrailingZeros().toPlainString());
     }
 
     private static OrderExecutionContractV1.Intent intent(
