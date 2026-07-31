@@ -18,6 +18,8 @@ public final class FixtureDeliveryProjectionV1 {
     private final Set<UUID> appliedEventIds = new HashSet<>();
     private final Map<UUID, Long> latestVersionByAggregate = new HashMap<>();
     private final Map<UUID, OrderLifecycleContractV1.EventType> orderStateByAggregate = new HashMap<>();
+    private final Map<UUID, UUID> intentIdByAggregate = new HashMap<>();
+    private final Map<UUID, UUID> candidateIdByAggregate = new HashMap<>();
     private final Map<UUID, BigDecimal> orderQuantityByAggregate = new HashMap<>();
     private final Map<UUID, BigDecimal> filledQuantityByAggregate = new HashMap<>();
     private int tradeCount;
@@ -71,6 +73,12 @@ public final class FixtureDeliveryProjectionV1 {
             if (event.orderQuantity().asBigDecimal().compareTo(orderQuantityByAggregate.get(aggregateId)) != 0) {
                 throw new IllegalStateException("orderQuantity changed within an order lifecycle");
             }
+            if (!event.intentId().equals(intentIdByAggregate.get(aggregateId))) {
+                throw new IllegalStateException("intentId changed within an order lifecycle");
+            }
+            if (!event.candidateId().equals(candidateIdByAggregate.get(aggregateId))) {
+                throw new IllegalStateException("candidateId changed within an order lifecycle");
+            }
         }
 
         if (event.fillQuantity() != null) {
@@ -91,6 +99,8 @@ public final class FixtureDeliveryProjectionV1 {
 
     private void applyLifecycle(UUID aggregateId, OrderLifecycleContractV1.Event event) {
         orderStateByAggregate.put(aggregateId, event.type());
+        intentIdByAggregate.putIfAbsent(aggregateId, event.intentId());
+        candidateIdByAggregate.putIfAbsent(aggregateId, event.candidateId());
         orderQuantityByAggregate.putIfAbsent(aggregateId, event.orderQuantity().asBigDecimal());
         if (event.fillQuantity() != null) {
             filledQuantityByAggregate.merge(aggregateId, event.fillQuantity().asBigDecimal(), BigDecimal::add);

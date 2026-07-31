@@ -80,6 +80,41 @@ class FixtureDeliveryProjectionV1Test {
     }
 
     @Test
+    void rejectsIntentIdentityDriftWithinAnOrderLifecycle() {
+        var projection = new FixtureDeliveryProjectionV1();
+        var partial = ContractFixturesV1.partialFillEnvelope();
+        var drifted = new OrderLifecycleContractV1.Event(
+            partial.payload().orderId(), UUID.fromString("71111111-1111-1111-1111-111111111111"),
+            partial.payload().candidateId(), partial.payload().type(), partial.payload().orderQuantity(),
+            partial.payload().fillQuantity(), partial.payload().fillPrice(), partial.payload().ledgerTransaction(), null
+        );
+
+        assertThat(projection.accept(ContractFixturesV1.acceptedEnvelope())).isEqualTo(DeliveryResult.APPLIED);
+        assertThatThrownBy(() -> projection.accept(withPayloadAndVersion(
+            partial, partial.eventId().toString(), 2, drifted
+        ))).isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("intentId");
+    }
+
+    @Test
+    void rejectsCandidateIdentityDriftWithinAnOrderLifecycle() {
+        var projection = new FixtureDeliveryProjectionV1();
+        var partial = ContractFixturesV1.partialFillEnvelope();
+        var drifted = new OrderLifecycleContractV1.Event(
+            partial.payload().orderId(), partial.payload().intentId(),
+            UUID.fromString("81111111-1111-1111-1111-111111111111"),
+            partial.payload().type(), partial.payload().orderQuantity(), partial.payload().fillQuantity(),
+            partial.payload().fillPrice(), partial.payload().ledgerTransaction(), null
+        );
+
+        assertThat(projection.accept(ContractFixturesV1.acceptedEnvelope())).isEqualTo(DeliveryResult.APPLIED);
+        assertThatThrownBy(() -> projection.accept(withPayloadAndVersion(
+            partial, partial.eventId().toString(), 2, drifted
+        ))).isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("candidateId");
+    }
+
+    @Test
     void cancellationAndRejectionUseIndependentSequentialHistories() {
         var cancellationProjection = new FixtureDeliveryProjectionV1();
         assertThat(cancellationProjection.accept(ContractFixturesV1.cancellationAcceptedEnvelope()))
