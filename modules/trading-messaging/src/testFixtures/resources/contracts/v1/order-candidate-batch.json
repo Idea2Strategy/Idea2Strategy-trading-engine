@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "batchId": "d4190e9c-2794-4c37-9361-f5f9164cc59e",
+  "evaluationId": "626825b7-9de7-447a-a775-d8840fd24e55",
+  "createdAt": "2026-07-31T14:30:00.200Z",
+  "candidates": [
+    {
+      "candidateId": "35c2d356-b7a3-43b4-80c3-fd7cad84cdcd",
+      "instrumentId": "8a35e6b5-cf84-4f63-920d-57c1f1b95df0",
+      "side": "BUY",
+      "quantity": 2,
+      "limitPrice": 210.12,
+      "reasonCodes": ["BASIC_RULE_MATCHED", "EQUAL_ALLOCATION"]
+    }
+  ]
+}

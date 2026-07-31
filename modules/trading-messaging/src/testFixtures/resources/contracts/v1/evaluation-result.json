@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "evaluationId": "626825b7-9de7-447a-a775-d8840fd24e55",
+  "botId": "e332fd66-3a21-4d3e-8a2a-4c2e4ee55430",
+  "strategyVersionId": "ebcddbea-319a-4475-ae27-8858036649a4",
+  "triggeringEventId": "evt_cffe872742cbbc8c471e84cca929ab3922d636f881f676792cd8a3886a49a008",
+  "evaluatedAt": "2026-07-31T14:30:00.200Z",
+  "outcome": "CANDIDATES_GENERATED",
+  "reasonCodes": ["BASIC_RULE_MATCHED"]
+}
