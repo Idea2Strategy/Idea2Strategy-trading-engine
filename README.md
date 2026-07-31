@@ -9,7 +9,7 @@
 - 서버에 저장된 잠긴 전략 버전만 실행
 - 브라우저나 사용자 기기 상태와 무관한 지속 실행
 
-예정 구조는 Gradle 멀티프로젝트입니다.
+Gradle 멀티프로젝트 골격은 다음과 같습니다.
 
 ```text
 apps/
@@ -26,4 +26,16 @@ modules/
 ```
 
 구현 전에는 루트 조정 저장소의 제품 규칙·계약·DBML과 [DEVELOPMENT.md](DEVELOPMENT.md)를 먼저 확인합니다.
+
+## 공통 골격 실행
+
+Java 21과 Gradle 8.14.3을 사용합니다.
+
+```text
+gradle test
+gradle :apps:market-gateway:bootRun
+gradle :apps:trading-worker:bootRun
+```
+
+두 App 모두 Docker 내부 네트워크에서 동작하며 호스트 포트를 열지 않습니다.
 

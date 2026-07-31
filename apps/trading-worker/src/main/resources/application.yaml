@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: trading-worker
+  main:
+    web-application-type: none
+    banner-mode: "off"
+    keep-alive: true

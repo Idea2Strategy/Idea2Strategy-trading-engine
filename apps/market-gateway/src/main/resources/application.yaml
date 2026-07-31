@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: market-gateway
+  main:
+    web-application-type: none
+    banner-mode: "off"
+    keep-alive: true
