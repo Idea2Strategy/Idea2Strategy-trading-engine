@@ -116,7 +116,7 @@ assertThatThrownBy(() -> new DecimalValueV1("1.20")).hasMessageContaining("canon
 Run:
 
 ```bash
-./gradlew :modules:trading-messaging:test --tests '*DuplicatePartialFillDeliveryTest'
+bash ./gradlew :modules:trading-messaging:test --tests '*DuplicatePartialFillDeliveryTest'
 ```
 
 Expected: compilation fails because `ContractFixturesV1`, `FixtureDeliveryProjectionV1`, and the v1 contract records do not exist.
@@ -177,7 +177,7 @@ public final class OrderLifecycleContractV1 {
 Run:
 
 ```bash
-./gradlew :modules:trading-messaging:test --tests '*DuplicatePartialFillDeliveryTest'
+bash ./gradlew :modules:trading-messaging:test --tests '*DuplicatePartialFillDeliveryTest'
 ```
 
 Expected: one test passes and the duplicate delivery does not increment either count.
@@ -185,7 +185,7 @@ Expected: one test passes and the duplicate delivery does not increment either c
 - [ ] **Step 7: Run module tests and commit**
 
 ```bash
-./gradlew :modules:trading-messaging:test
+bash ./gradlew :modules:trading-messaging:test
 git add modules/trading-messaging
 git commit -m "feat: define idempotent partial-fill contract"
 ```
@@ -227,7 +227,7 @@ assertThatThrownBy(() -> unbalancedTransaction())
 - [ ] **Step 2: Run the tests and verify RED**
 
 ```bash
-./gradlew :modules:trading-messaging:test --tests '*OrderExecutionContractV1Test' --tests '*LedgerContractV1Test'
+bash ./gradlew :modules:trading-messaging:test --tests '*OrderExecutionContractV1Test' --tests '*LedgerContractV1Test'
 ```
 
 Expected: compilation fails because `OrderExecutionContractV1` and the complete validation API do not exist.
@@ -263,7 +263,7 @@ Implement compact-constructor rules from Global Constraints. `IntentBatch` copie
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
 ```bash
-./gradlew :modules:trading-messaging:test --tests '*OrderExecutionContractV1Test' --tests '*LedgerContractV1Test'
+bash ./gradlew :modules:trading-messaging:test --tests '*OrderExecutionContractV1Test' --tests '*LedgerContractV1Test'
 ```
 
 Expected: all order-combination and ledger-balance tests pass.
@@ -271,7 +271,7 @@ Expected: all order-combination and ledger-balance tests pass.
 - [ ] **Step 5: Run module tests and commit**
 
 ```bash
-./gradlew :modules:trading-messaging:test
+bash ./gradlew :modules:trading-messaging:test
 git add modules/trading-messaging
 git commit -m "feat: validate order execution contract"
 ```
@@ -307,7 +307,7 @@ void intentFixturesRetainCandidateIdentityAndAllDecisionOutcomes() {
 - [ ] **Step 2: Run the test and verify RED**
 
 ```bash
-./gradlew :modules:trading-messaging:test --tests '*OrderCandidateContractV1Test'
+bash ./gradlew :modules:trading-messaging:test --tests '*OrderCandidateContractV1Test'
 ```
 
 Expected: compilation fails because the candidate contract and fixture methods do not exist.
@@ -331,8 +331,8 @@ Reject duplicate candidate IDs and blank partition/reason codes. `ContractFixtur
 - [ ] **Step 4: Run focused and module tests**
 
 ```bash
-./gradlew :modules:trading-messaging:test --tests '*OrderCandidateContractV1Test'
-./gradlew :modules:trading-messaging:test
+bash ./gradlew :modules:trading-messaging:test --tests '*OrderCandidateContractV1Test'
+bash ./gradlew :modules:trading-messaging:test
 ```
 
 Expected: candidate linkage and all prior tests pass.
@@ -406,7 +406,7 @@ void staleIsIgnoredAndFutureGapIsRejected() {
 - [ ] **Step 2: Run tests and verify RED**
 
 ```bash
-./gradlew :modules:trading-messaging:test --tests '*CanonicalJsonFixturesV1Test' --tests '*OutOfOrderDeliveryTest'
+bash ./gradlew :modules:trading-messaging:test --tests '*CanonicalJsonFixturesV1Test' --tests '*OutOfOrderDeliveryTest'
 ```
 
 Expected: compilation or resource-loading failure because settlement, loader, and JSON resources do not exist.
@@ -497,8 +497,8 @@ Every envelope JSON uses this field order and naming; replace only the event ide
 - [ ] **Step 5: Run focused and module tests**
 
 ```bash
-./gradlew :modules:trading-messaging:test --tests '*CanonicalJsonFixturesV1Test' --tests '*OutOfOrderDeliveryTest'
-./gradlew :modules:trading-messaging:test
+bash ./gradlew :modules:trading-messaging:test --tests '*CanonicalJsonFixturesV1Test' --tests '*OutOfOrderDeliveryTest'
+bash ./gradlew :modules:trading-messaging:test
 ```
 
 Expected: all canonical resources round-trip as equal JSON trees and ordering behavior passes.
@@ -524,7 +524,7 @@ git commit -m "test: publish COM-F canonical JSON fixtures"
 - [ ] **Step 1: Run focused acceptance tests**
 
 ```bash
-./gradlew :modules:trading-messaging:test \
+bash ./gradlew :modules:trading-messaging:test \
   --tests '*DuplicatePartialFillDeliveryTest' \
   --tests '*OrderExecutionContractV1Test' \
   --tests '*LedgerContractV1Test' \
@@ -538,8 +538,8 @@ Expected: all COM-F tests pass with zero failures.
 - [ ] **Step 2: Run the full repository verification**
 
 ```bash
-./gradlew test
-./gradlew build
+bash ./gradlew test
+bash ./gradlew build
 ```
 
 Expected: every trading-engine test and build task succeeds.
