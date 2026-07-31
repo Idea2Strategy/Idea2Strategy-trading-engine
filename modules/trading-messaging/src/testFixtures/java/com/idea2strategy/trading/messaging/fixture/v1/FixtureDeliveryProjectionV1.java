@@ -121,7 +121,21 @@ public final class FixtureDeliveryProjectionV1 {
         String gapError
     ) {
         public DeliveryScenario {
-            deliveryEventIds = List.copyOf(ContractValidationV1.required(deliveryEventIds, "deliveryEventIds"));
+            deliveryEventIds = ContractValidationV1.required(deliveryEventIds, "deliveryEventIds");
+            var uniqueEventIds = new HashSet<UUID>();
+            for (UUID deliveryEventId : deliveryEventIds) {
+                ContractValidationV1.required(deliveryEventId, "deliveryEventId");
+                if (!uniqueEventIds.add(deliveryEventId)) {
+                    throw new IllegalArgumentException("duplicate deliveryEventId");
+                }
+            }
+            deliveryEventIds = List.copyOf(deliveryEventIds);
+            if (expectedTradeCount < 0) {
+                throw new IllegalArgumentException("expectedTradeCount must be non-negative");
+            }
+            if (expectedLedgerEntryCount < 0) {
+                throw new IllegalArgumentException("expectedLedgerEntryCount must be non-negative");
+            }
             ContractValidationV1.required(duplicateResult, "duplicateResult");
             ContractValidationV1.required(staleResult, "staleResult");
             ContractValidationV1.requiredText(gapError, "gapError");

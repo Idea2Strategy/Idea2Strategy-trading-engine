@@ -1,7 +1,7 @@
 package com.idea2strategy.trading.messaging.contract.v1;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.idea2strategy.trading.messaging.fixture.v1.ContractFixturesV1;
 import com.idea2strategy.trading.messaging.fixture.v1.ContractJsonFixtureLoaderV1;
 import com.idea2strategy.trading.messaging.fixture.v1.FixtureDeliveryProjectionV1;
@@ -29,7 +29,17 @@ class CanonicalJsonFixturesV1Test {
         assertThatThrownBy(() -> ContractJsonFixtureLoaderV1.mapper().readValue(
             "{\"settlementId\":\"00000000-0000-0000-0000-000000000701\",\"botId\":\"00000000-0000-0000-0000-000000000101\",\"type\":\"UNKNOWN\",\"reasonCode\":null,\"attempt\":1,\"affectedOrderIds\":[\"00000000-0000-0000-0000-000000000401\"]}",
             SettlementContractV1.Event.class
-        )).isInstanceOf(JsonProcessingException.class);
+        )).isInstanceOf(JsonMappingException.class);
+    }
+
+    @Test
+    void ignoresUnknownOptionalPropertiesWhileKeepingUnknownEnumsStrict() throws Exception {
+        var settlement = ContractJsonFixtureLoaderV1.mapper().readValue(
+            "{\"settlementId\":\"00000000-0000-0000-0000-000000000701\",\"botId\":\"00000000-0000-0000-0000-000000000101\",\"type\":\"COMPLETED\",\"reasonCode\":null,\"attempt\":2,\"affectedOrderIds\":[\"00000000-0000-0000-0000-000000000401\"],\"futureOptionalField\":\"ignored\"}",
+            SettlementContractV1.Event.class
+        );
+
+        assertThat(settlement.type()).isEqualTo(SettlementContractV1.EventType.COMPLETED);
     }
 
     @Test

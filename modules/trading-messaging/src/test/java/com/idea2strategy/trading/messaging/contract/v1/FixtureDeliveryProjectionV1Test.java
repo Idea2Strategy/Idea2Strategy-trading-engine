@@ -6,6 +6,8 @@ import com.idea2strategy.trading.messaging.fixture.v1.FixtureDeliveryProjectionV
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -90,6 +92,20 @@ class FixtureDeliveryProjectionV1Test {
             .isEqualTo(DeliveryResult.APPLIED);
     }
 
+    @Test
+    void deliveryScenarioRejectsNegativeNullAndDuplicateValues() {
+        var eventId = UUID.fromString("81111111-1111-1111-1111-111111111111");
+        assertThatThrownBy(() -> scenario(List.of(eventId), -1, 0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("expectedTradeCount");
+        assertThatThrownBy(() -> scenario(Arrays.asList(eventId, null), 0, 0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("deliveryEventId");
+        assertThatThrownBy(() -> scenario(List.of(eventId, eventId), 0, 0))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("duplicate deliveryEventId");
+    }
+
     private TradingEnvelopeV1<?> withVersion(
         TradingEnvelopeV1<?> original,
         String eventId,
@@ -107,6 +123,17 @@ class FixtureDeliveryProjectionV1Test {
             original.aggregateId(),
             aggregateVersion,
             original.payload()
+        );
+    }
+
+    private FixtureDeliveryProjectionV1.DeliveryScenario scenario(
+        List<UUID> eventIds,
+        int expectedTradeCount,
+        int expectedLedgerEntryCount
+    ) {
+        return new FixtureDeliveryProjectionV1.DeliveryScenario(
+            eventIds, expectedTradeCount, expectedLedgerEntryCount,
+            DeliveryResult.DUPLICATE, DeliveryResult.STALE, "aggregate version gap: sequence gap"
         );
     }
 
