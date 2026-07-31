@@ -14,6 +14,7 @@
 - Do not change the root repository, `specs/**`, `contracts/**`, DBML, Flyway migrations, persistence modules, or C-owned market/evaluation code.
 - Keep public wire types in `com.idea2strategy.trading.messaging.contract.v1`; incompatible future shapes require a new versioned package.
 - Encode decimal wire values as canonical nonnegative strings and timestamps as UTC `Instant` values.
+- Require positive requests, non-rejected approvals, fills, prices, and postings; approved quantity zero is reserved for rejected intents. Currency validation is syntax-only (`[A-Z]{3}`).
 - Use the exact example fee rate `0.002` and slippage rate `0.0005`, each accompanied by an explicit policy version.
 - Fractional-share and notional orders are allowed only for eligible long MARKET/DAY orders; new shorts and all LIMIT, STOP, STOP_LIMIT, and TRAILING_STOP orders require whole shares.
 - GTD requires an explicit UTC expiry; DAY and GTC must not carry one.
@@ -27,7 +28,7 @@
 - Create `modules/trading-messaging/src/main/java/com/idea2strategy/trading/messaging/contract/v1/ContractValidationV1.java` for shared constructor validation.
 - Create `.../TradingEnvelopeV1.java` for trace, identity, idempotency, and aggregate sequence metadata.
 - Create `.../DecimalValueV1.java` and `.../CurrencyAmountV1.java` for stable decimal wire values.
-- Create `.../OrderCandidateContractV1.java` for inbound candidate batches owned by C and consumed by F.
+- Consume C's existing `com.idea2strategy.trading.messaging.evaluation.OrderCandidateBatch` directly and protect that boundary with a consumer contract test.
 - Create `.../OrderExecutionContractV1.java` for intent batches, cost policy, order type, side, quantity mode, and time-in-force.
 - Create `.../OrderLifecycleContractV1.java` for accepted, partial-fill, fill, cancel, expire, and reject events.
 - Create `.../SettlementContractV1.java` for requested, completed, and failed settlement events.
@@ -92,6 +93,7 @@ void duplicatePartialFillCreatesOneTradeAndOneLedgerPostingSet() {
     var partialFill = ContractFixturesV1.partialFillEnvelope();
     var projection = new FixtureDeliveryProjectionV1();
 
+    assertThat(projection.accept(ContractFixturesV1.acceptedEnvelope())).isEqualTo(DeliveryResult.APPLIED);
     assertThat(projection.accept(partialFill)).isEqualTo(DeliveryResult.APPLIED);
     assertThat(projection.accept(partialFill)).isEqualTo(DeliveryResult.DUPLICATE);
     assertThat(projection.tradeCount()).isEqualTo(1);
@@ -164,13 +166,14 @@ public final class LedgerContractV1 {
 
 public final class OrderLifecycleContractV1 {
     public enum EventType { ACCEPTED, PARTIALLY_FILLED, FILLED, CANCELLED, EXPIRED, REJECTED }
-    public record Event(UUID orderId, EventType type, DecimalValueV1 fillQuantity,
+    public record Event(UUID orderId, UUID intentId, UUID candidateId,
+                        EventType type, DecimalValueV1 orderQuantity, DecimalValueV1 fillQuantity,
                         CurrencyAmountV1 fillPrice,
                         LedgerContractV1.Transaction ledgerTransaction) {}
 }
 ```
 
-`LedgerContractV1.Transaction` must copy its entry list, require at least two entries, and compare debit and credit totals by currency. `ContractFixturesV1.partialFillEnvelope()` uses fixed UUIDs, a UTC timestamp, two balanced USD entries, and aggregate version 1. `FixtureDeliveryProjectionV1` declares `public enum DeliveryResult { APPLIED, DUPLICATE, STALE }`, stores applied event IDs and the latest version per aggregate, and exposes `DeliveryResult accept(TradingEnvelopeV1<?> envelope)`. Duplicate IDs return `DUPLICATE`, lower/equal old versions return `STALE`, the next version returns `APPLIED`, and a version gap throws `IllegalStateException`.
+`LedgerContractV1.Transaction` must copy its entry list, require at least two entries, reject duplicate entry IDs, require every entry source to match the transaction source, and compare debit and credit totals by currency. `ContractFixturesV1.partialFillEnvelope()` uses fixed UUIDs, a UTC timestamp, two balanced USD entries, and aggregate version 2 after accepted version 1. `FixtureDeliveryProjectionV1` declares `public enum DeliveryResult { APPLIED, DUPLICATE, STALE }`, stores applied event IDs and the latest version per aggregate, and exposes `DeliveryResult accept(TradingEnvelopeV1<?> envelope)`. Duplicate IDs return `DUPLICATE`, lower/equal old versions return `STALE`, the next version returns `APPLIED`, and a version gap throws `IllegalStateException`. Lifecycle projection also rejects overfills and post-terminal transitions.
 
 - [ ] **Step 6: Run the focused test and verify GREEN**
 
@@ -247,7 +250,8 @@ public final class OrderExecutionContractV1 {
     public record CostPolicy(String version, DecimalValueV1 feeRate,
                              DecimalValueV1 slippageRate) {}
     public record Intent(UUID intentId, UUID candidateId, UUID instrumentId,
-                         Side side, OrderType orderType, TimeInForce timeInForce,
+                         Side side, OrderType orderType, OrderParameters orderParameters,
+                         TimeInForce timeInForce,
                          Instant expiresAt, QuantityMode quantityMode,
                          DecimalValueV1 requestedQuantity,
                          DecimalValueV1 approvedQuantity,
@@ -258,7 +262,7 @@ public final class OrderExecutionContractV1 {
 }
 ```
 
-Implement compact-constructor rules from Global Constraints. `IntentBatch` copies the list and rejects duplicate intent IDs. Expand lifecycle payloads with cancellation, expiration, and rejection reason codes while allowing fill fields and ledger transaction only on partial/final fill events.
+`OrderParameters` carries nullable `limitPrice`, `stopPrice`, and `trailPercent` fields with an exact type matrix: MARKET none, LIMIT only limit, STOP only stop, STOP_LIMIT both prices, TRAILING_STOP only trail in `(0, 1]`. Implement compact-constructor rules from Global Constraints. `IntentBatch` copies the list and rejects duplicate intent IDs. Expand lifecycle payloads with cancellation, expiration, and rejection reason codes while allowing fill fields and ledger transaction only on partial/final fill events.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -278,60 +282,54 @@ git commit -m "feat: validate order execution contract"
 
 ---
 
-### Task 3: Add candidate batches and accepted/reduced/rejected intent fixtures
+### Task 3: Consume C's candidate batch and add accepted/reduced/rejected intent fixtures
 
 **Files:**
-- Create: `modules/trading-messaging/src/main/java/com/idea2strategy/trading/messaging/contract/v1/OrderCandidateContractV1.java`
+- Consume without modifying: `modules/trading-messaging/src/main/java/com/idea2strategy/trading/messaging/evaluation/OrderCandidate.java`
+- Consume without modifying: `modules/trading-messaging/src/main/java/com/idea2strategy/trading/messaging/evaluation/OrderCandidateBatch.java`
+- Consume without modifying: `modules/trading-messaging/src/testFixtures/resources/contracts/v1/order-candidate-batch.json`
 - Modify: `modules/trading-messaging/src/testFixtures/java/com/idea2strategy/trading/messaging/fixture/v1/ContractFixturesV1.java`
-- Create: `modules/trading-messaging/src/test/java/com/idea2strategy/trading/messaging/contract/v1/OrderCandidateContractV1Test.java`
+- Create: `modules/trading-messaging/src/test/java/com/idea2strategy/trading/messaging/contract/v1/UpstreamOrderCandidateCompatibilityTest.java`
 
 **Interfaces:**
-- Consumes: Task 2 execution enums and value types.
-- Produces: `OrderCandidateContractV1.CandidateBatch`, deterministic object fixtures, and candidate-to-intent identity linkage.
+- Consumes: C's exact `OrderCandidateBatch(int schemaVersion, UUID batchId, UUID evaluationId, Instant createdAt, List<OrderCandidate> candidates)`.
+- Produces: deterministic F intent fixtures with candidate and evaluation identity retained from the producer-owned type.
 
 - [ ] **Step 1: Write the failing candidate fixture test**
 
 ```java
 @Test
-void intentFixturesRetainCandidateIdentityAndAllDecisionOutcomes() {
-    var candidates = ContractFixturesV1.candidateBatchEnvelope().payload();
-    var intents = ContractFixturesV1.intentBatchEnvelope().payload();
+void loadsUpstreamFixtureAndRetainsCandidateIdentity() {
+    var candidates = ContractJsonFixtureLoaderV1.readResource(
+        "contracts/v1/order-candidate-batch.json",
+        new TypeReference<OrderCandidateBatch>() {}
+    );
+    var intents = ContractFixturesV1.intentBatchFor(candidates).payload();
 
-    assertThat(intents.intents()).extracting(Intent::decision)
-        .containsExactly(ACCEPTED, REDUCED, REJECTED);
-    assertThat(intents.intents()).extracting(Intent::candidateId)
-        .allMatch(id -> candidates.candidates().stream().anyMatch(c -> c.candidateId().equals(id)));
+    assertThat(intents.evaluationId()).isEqualTo(candidates.evaluationId());
+    assertThat(intents.intents()).allSatisfy(intent ->
+        assertThat(candidates.candidates()).extracting(OrderCandidate::candidateId)
+            .contains(intent.candidateId())
+    );
 }
 ```
 
 - [ ] **Step 2: Run the test and verify RED**
 
 ```bash
-bash ./gradlew :modules:trading-messaging:test --tests '*OrderCandidateContractV1Test'
+bash ./gradlew :modules:trading-messaging:test --tests '*UpstreamOrderCandidateCompatibilityTest'
 ```
 
-Expected: compilation fails because the candidate contract and fixture methods do not exist.
+Expected: compilation fails because the upstream-resource loader and direct candidate-to-intent fixture method do not exist.
 
-- [ ] **Step 3: Implement the candidate contract and deterministic fixtures**
+- [ ] **Step 3: Implement direct producer-type consumption and deterministic fixtures**
 
-```java
-public final class OrderCandidateContractV1 {
-    public record Candidate(UUID candidateId, UUID instrumentId,
-                            OrderExecutionContractV1.Side side,
-                            DecimalValueV1 requestedWeight,
-                            String reasonCode) {}
-    public record CandidateBatch(UUID batchId, UUID botId, UUID strategyVersionId,
-                                 UUID evaluationId, String partitionKey,
-                                 List<Candidate> candidates) {}
-}
-```
-
-Reject duplicate candidate IDs and blank partition/reason codes. `ContractFixturesV1` must use fixed UUIDs and `Instant.parse(...)` values, expose candidate and intent envelopes, and use the exact policy values `0.002` and `0.0005`.
+Do not create a parallel candidate record or COM-F candidate JSON resource. Load C's upstream fixture as `evaluation.OrderCandidateBatch`, map `OrderSide` explicitly to F's supported side, retain `candidateId`, `instrumentId`, and `evaluationId`, and use exact policy values `0.002` and `0.0005`. A future incompatible producer shape requires a clearly versioned adapter.
 
 - [ ] **Step 4: Run focused and module tests**
 
 ```bash
-bash ./gradlew :modules:trading-messaging:test --tests '*OrderCandidateContractV1Test'
+bash ./gradlew :modules:trading-messaging:test --tests '*UpstreamOrderCandidateCompatibilityTest'
 bash ./gradlew :modules:trading-messaging:test
 ```
 
@@ -341,7 +339,7 @@ Expected: candidate linkage and all prior tests pass.
 
 ```bash
 git add modules/trading-messaging
-git commit -m "feat: add candidate and intent fixtures"
+git commit -m "fix: consume upstream order candidate contract"
 ```
 
 ---
@@ -351,14 +349,16 @@ git commit -m "feat: add candidate and intent fixtures"
 **Files:**
 - Create: `modules/trading-messaging/src/main/java/com/idea2strategy/trading/messaging/contract/v1/SettlementContractV1.java`
 - Create: `modules/trading-messaging/src/testFixtures/java/com/idea2strategy/trading/messaging/fixture/v1/ContractJsonFixtureLoaderV1.java`
-- Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/candidate-batch.json`
 - Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/intent-batch.json`
 - Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/order-accepted.json`
 - Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/order-partial-fill.json`
 - Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/order-filled.json`
 - Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/order-cancelled.json`
 - Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/order-rejected.json`
+- Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/settlement-requested.json`
+- Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/settlement-failed.json`
 - Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/settlement-completed.json`
+- Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/order-intent-validation-matrix.json`
 - Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/ledger-transaction.json`
 - Create: `modules/trading-messaging/src/testFixtures/resources/contracts/trading/v1/delivery-scenario.json`
 - Create: `modules/trading-messaging/src/test/java/com/idea2strategy/trading/messaging/contract/v1/CanonicalJsonFixturesV1Test.java`
@@ -379,13 +379,14 @@ void canonicalFixtureRoundTripsWithoutWireShapeDrift(String resource, TypeRefere
 
 static Stream<Arguments> canonicalFixtures() {
     return Stream.of(
-        Arguments.of("candidate-batch.json", new TypeReference<TradingEnvelopeV1<OrderCandidateContractV1.CandidateBatch>>() {}),
         Arguments.of("intent-batch.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {}),
         Arguments.of("order-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
         Arguments.of("order-partial-fill.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
         Arguments.of("order-filled.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
         Arguments.of("order-cancelled.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
         Arguments.of("order-rejected.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
+        Arguments.of("settlement-requested.json", new TypeReference<TradingEnvelopeV1<SettlementContractV1.Event>>() {}),
+        Arguments.of("settlement-failed.json", new TypeReference<TradingEnvelopeV1<SettlementContractV1.Event>>() {}),
         Arguments.of("settlement-completed.json", new TypeReference<TradingEnvelopeV1<SettlementContractV1.Event>>() {}),
         Arguments.of("ledger-transaction.json", new TypeReference<TradingEnvelopeV1<LedgerContractV1.Transaction>>() {}),
         Arguments.of("delivery-scenario.json", new TypeReference<FixtureDeliveryProjectionV1.DeliveryScenario>() {})
@@ -422,7 +423,7 @@ public final class SettlementContractV1 {
 }
 ```
 
-Require `attempt >= 1`, immutable affected-order IDs, a nonblank reason on FAILED, and no hidden default reason on other states. `ContractJsonFixtureLoaderV1` must construct a configured `ObjectMapper`, read a classpath resource through a caller-provided `TypeReference<T>`, serialize the object, and compare source/output as `JsonNode` trees. Add a malformed in-memory JSON case with `"type":"UNKNOWN"` and assert deserialization throws a Jackson mapping exception. Add a fixture scan that collects every envelope `eventId` and asserts no duplicate IDs exist across canonical resources.
+Require `attempt >= 1`, immutable affected-order IDs, a nonblank reason on FAILED, and no hidden default reason on other states. `ContractJsonFixtureLoaderV1` must construct a configured `ObjectMapper`, explicitly ignore unknown optional properties, keep unknown enums strict, read a classpath resource through a caller-provided `TypeReference<T>`, serialize the object, and compare source/output as `JsonNode` trees. Jackson types exposed by public fixture methods must be `testFixturesApi` dependencies. Add a malformed in-memory JSON case with `"type":"UNKNOWN"` and assert deserialization throws `JsonMappingException`. Add a fixture scan that collects every envelope `eventId` and asserts no duplicate IDs exist across canonical resources.
 
 Add this nested resource model to `FixtureDeliveryProjectionV1`:
 
@@ -441,9 +442,9 @@ public record DeliveryScenario(
 }
 ```
 
-- [ ] **Step 4: Create the ten canonical JSON resources**
+- [ ] **Step 4: Create the canonical JSON resources**
 
-Each resource must match the deterministic UUIDs, timestamps, policy version, decimal strings, and enum spellings returned by `ContractFixturesV1`. `delivery-scenario.json` contains ordered delivery event IDs plus expected `tradeCount`, `ledgerEntryCount`, duplicate result, stale result, and gap error text.
+Each F resource must match the deterministic UUIDs, timestamps, policy version, decimal strings, and enum spellings returned by `ContractFixturesV1`. The C candidate input remains only at upstream `contracts/v1/order-candidate-batch.json`. `delivery-scenario.json` contains ordered delivery event IDs plus expected `tradeCount`, `ledgerEntryCount`, duplicate result, stale result, and gap error text. Settlement resources form requested v1 → failed v2 → completed retry v3 with one settlement identity. The intent matrix executes valid and rejected combinations for all order types, DAY/GTC/GTD, and whole/fractional/notional modes.
 
 Use the following constants for every Java and JSON fixture so cross-file identity is unambiguous:
 
@@ -472,13 +473,16 @@ Every envelope JSON uses this field order and naming; replace only the event ide
   "occurredAt": "2026-07-31T14:30:00Z",
   "producer": "trading-worker",
   "correlationId": "00000000-0000-0000-0000-000000000801",
-  "causationId": "00000000-0000-0000-0000-000000000802",
+  "causationId": "00000000-0000-0000-0000-000000000411",
   "idempotencyKey": "partial-fill-00000000-0000-0000-0000-000000000501",
   "aggregateId": "00000000-0000-0000-0000-000000000401",
-  "aggregateVersion": 1,
+  "aggregateVersion": 2,
   "payload": {
     "orderId": "00000000-0000-0000-0000-000000000401",
+    "intentId": "00000000-0000-0000-0000-000000000311",
+    "candidateId": "00000000-0000-0000-0000-000000000211",
     "type": "PARTIALLY_FILLED",
+    "orderQuantity": { "value": "10.5" },
     "fillQuantity": { "value": "2.5" },
     "fillPrice": { "currency": "USD", "amount": { "value": "100" } },
     "ledgerTransaction": {
@@ -528,7 +532,8 @@ bash ./gradlew :modules:trading-messaging:test \
   --tests '*DuplicatePartialFillDeliveryTest' \
   --tests '*OrderExecutionContractV1Test' \
   --tests '*LedgerContractV1Test' \
-  --tests '*OrderCandidateContractV1Test' \
+  --tests '*UpstreamOrderCandidateCompatibilityTest' \
+  --tests '*OrderIntentValidationMatrixV1Test' \
   --tests '*CanonicalJsonFixturesV1Test' \
   --tests '*OutOfOrderDeliveryTest'
 ```
