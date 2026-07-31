@@ -28,7 +28,7 @@ public record TradingEnvelopeV1<T>(
         ContractValidationV1.required(aggregateId, "aggregateId");
         ContractValidationV1.positiveVersion(aggregateVersion, "aggregateVersion");
         ContractValidationV1.required(payload, "payload");
-        validateKnownPayload(schemaVersion, eventType, eventId, occurredAt, aggregateId, payload);
+        validateKnownPayload(schemaVersion, eventType, eventId, occurredAt, causationId, aggregateId, payload);
     }
 
     private static void validateKnownPayload(
@@ -36,6 +36,7 @@ public record TradingEnvelopeV1<T>(
         String eventType,
         UUID eventId,
         Instant occurredAt,
+        UUID causationId,
         UUID aggregateId,
         Object payload
     ) {
@@ -57,7 +58,7 @@ public record TradingEnvelopeV1<T>(
         } else if (payload instanceof LedgerContractV1.Transaction transaction) {
             requireContractRoute(schemaVersion, eventType, "ledger.transaction");
             requireAggregate(aggregateId, transaction.transactionId());
-            validateLedgerPublication(eventId, occurredAt, transaction);
+            validateLedgerPublication(causationId, occurredAt, transaction);
         } else if (payload instanceof SettlementContractV1.Event event) {
             requireContractRoute(schemaVersion, eventType, switch (event.type()) {
                 case REQUESTED -> "settlement.requested";
@@ -80,12 +81,12 @@ public record TradingEnvelopeV1<T>(
     }
 
     private static void validateLedgerPublication(
-        UUID eventId,
+        UUID expectedSourceEventId,
         Instant occurredAt,
         LedgerContractV1.Transaction transaction
     ) {
-        if (!eventId.equals(transaction.sourceEventId())) {
-            throw new IllegalArgumentException("ledger sourceEventId must match envelope eventId");
+        if (!expectedSourceEventId.equals(transaction.sourceEventId())) {
+            throw new IllegalArgumentException("ledger sourceEventId must match its publication source");
         }
         if (!occurredAt.equals(transaction.postedAt())) {
             throw new IllegalArgumentException("ledger postedAt must equal envelope occurredAt");

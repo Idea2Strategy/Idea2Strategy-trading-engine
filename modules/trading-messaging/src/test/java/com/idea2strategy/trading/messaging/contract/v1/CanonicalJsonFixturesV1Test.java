@@ -12,6 +12,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.HashSet;
+import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,15 +76,34 @@ class CanonicalJsonFixturesV1Test {
         assertThat(filled.causationId()).isEqualTo(partial.eventId());
         assertThat(ledger.causationId()).isEqualTo(partial.eventId());
 
-        var entryIds = Stream.of(
+        var independentlyPostedEntryIds = Stream.of(
                 partial.payload().ledgerTransaction(),
-                filled.payload().ledgerTransaction(),
-                ledger.payload()
-            )
-            .flatMap(transaction -> transaction.entries().stream())
+                filled.payload().ledgerTransaction()
+            ).flatMap(transaction -> transaction.entries().stream())
             .map(LedgerContractV1.Entry::entryId)
             .toList();
-        assertThat(new HashSet<>(entryIds)).hasSameSizeAs(entryIds);
+        assertThat(new HashSet<>(independentlyPostedEntryIds)).hasSameSizeAs(independentlyPostedEntryIds);
+    }
+
+    @Test
+    void standaloneLedgerEnvelopeRepublishesTheEmbeddedPartialFillTransaction() {
+        var partial = read("order-partial-fill.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {});
+        var ledger = read("ledger-transaction.json", new TypeReference<TradingEnvelopeV1<LedgerContractV1.Transaction>>() {});
+
+        assertThat(ledger.payload()).isEqualTo(partial.payload().ledgerTransaction());
+        assertThat(ledger.payload().transactionId()).hasToString("00000000-0000-0000-0000-000000000601");
+        assertThat(ledger.payload().entries()).extracting(LedgerContractV1.Entry::entryId)
+            .extracting(UUID::toString)
+            .containsExactly(
+                "00000000-0000-0000-0000-000000000611",
+                "00000000-0000-0000-0000-000000000612"
+            );
+        assertThat(ledger.causationId()).isEqualTo(partial.eventId());
+        assertThat(ledger.payload().sourceEventId()).isEqualTo(ledger.causationId());
+        assertThat(ledger.payload().entries()).allSatisfy(entry ->
+            assertThat(entry.sourceEventId()).isEqualTo(ledger.causationId())
+        );
+        assertThat(ledger.payload().sourceEventId()).isNotEqualTo(ledger.eventId());
     }
 
     @Test

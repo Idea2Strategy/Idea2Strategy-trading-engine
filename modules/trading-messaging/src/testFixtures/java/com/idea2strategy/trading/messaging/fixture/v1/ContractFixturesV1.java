@@ -31,7 +31,6 @@ public final class ContractFixturesV1 {
     public static final UUID REJECTED_ORDER_ID = UUID.fromString("00000000-0000-0000-0000-000000000403");
     public static final UUID PARTIAL_FILL_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000501");
     public static final UUID LEDGER_TRANSACTION_ID = UUID.fromString("00000000-0000-0000-0000-000000000601");
-    public static final UUID LEDGER_PUBLICATION_TRANSACTION_ID = UUID.fromString("00000000-0000-0000-0000-000000000604");
     public static final UUID SETTLEMENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000701");
     public static final Instant FIXTURE_TIME = Instant.parse("2026-07-31T14:30:00Z");
     public static final Instant CANONICAL_TIME = Instant.parse("2026-07-31T14:30:00.200Z");
@@ -218,9 +217,11 @@ public final class ContractFixturesV1 {
     }
 
     public static TradingEnvelopeV1<LedgerContractV1.Transaction> ledgerTransactionEnvelope() {
-        return envelope("ledger.transaction", LEDGER_ENVELOPE_EVENT_ID, "ledger-transaction-" + LEDGER_PUBLICATION_TRANSACTION_ID,
-            LEDGER_PUBLICATION_TRANSACTION_ID, 1, PARTIAL_FILL_EVENT_ID,
-            ledgerTransaction(LEDGER_PUBLICATION_TRANSACTION_ID, LEDGER_ENVELOPE_EVENT_ID, FIXTURE_TIME, "250", "SECURITY", "CASH"));
+        return envelopeAt(
+            "ledger.transaction", LEDGER_ENVELOPE_EVENT_ID, "ledger-transaction-" + LEDGER_TRANSACTION_ID,
+            LEDGER_TRANSACTION_ID, 1, PARTIAL_FILL_EVENT_ID, CANONICAL_TIME,
+            ledgerTransaction(LEDGER_TRANSACTION_ID, PARTIAL_FILL_EVENT_ID, CANONICAL_TIME, "210.12", "SECURITY", "CASH")
+        );
     }
 
     public static FixtureDeliveryProjectionV1.DeliveryScenario deliveryScenario() {
@@ -306,8 +307,7 @@ public final class ContractFixturesV1 {
     }
 
     private static UUID entryId(UUID transactionId, int sequence) {
-        String entrySuffix = transactionId.equals(LEDGER_TRANSACTION_ID) ? "61"
-            : transactionId.equals(LEDGER_PUBLICATION_TRANSACTION_ID) ? "64" : "62";
+        String entrySuffix = transactionId.equals(LEDGER_TRANSACTION_ID) ? "61" : "62";
         return UUID.fromString("00000000-0000-0000-0000-000000000" + entrySuffix + sequence);
     }
 
