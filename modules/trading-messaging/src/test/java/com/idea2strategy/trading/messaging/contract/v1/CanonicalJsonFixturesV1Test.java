@@ -84,6 +84,21 @@ class CanonicalJsonFixturesV1Test {
     }
 
     @Test
+    void canonicalDeliveryScenarioStartsWithAcceptedBeforeDuplicatePartialFill() {
+        var scenario = read("delivery-scenario.json", new TypeReference<FixtureDeliveryProjectionV1.DeliveryScenario>() {});
+        var accepted = ContractFixturesV1.acceptedEnvelope();
+        var partial = ContractFixturesV1.partialFillEnvelope();
+        var projection = new FixtureDeliveryProjectionV1();
+
+        assertThat(scenario.deliveryEventIds()).containsExactly(accepted.eventId(), partial.eventId());
+        assertThat(projection.accept(accepted)).isEqualTo(FixtureDeliveryProjectionV1.DeliveryResult.APPLIED);
+        assertThat(projection.accept(partial)).isEqualTo(FixtureDeliveryProjectionV1.DeliveryResult.APPLIED);
+        assertThat(projection.accept(partial)).isEqualTo(scenario.duplicateResult());
+        assertThat(projection.tradeCount()).isEqualTo(scenario.expectedTradeCount());
+        assertThat(projection.ledgerEntryCount()).isEqualTo(scenario.expectedLedgerEntryCount());
+    }
+
+    @Test
     void canonicalResourcesMatchDeterministicJavaFixtures() {
         assertThat(read("intent-batch.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {}))
             .isEqualTo(ContractFixturesV1.intentBatchEnvelope());

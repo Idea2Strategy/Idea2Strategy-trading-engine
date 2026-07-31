@@ -450,7 +450,6 @@ Use the following constants for every Java and JSON fixture so cross-file identi
 
 ```java
 static final UUID BOT_ID = UUID.fromString("00000000-0000-0000-0000-000000000101");
-static final UUID STRATEGY_VERSION_ID = UUID.fromString("00000000-0000-0000-0000-000000000102");
 static final UUID EVALUATION_ID = UUID.fromString("00000000-0000-0000-0000-000000000103");
 static final UUID INSTRUMENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000104");
 static final UUID CANDIDATE_BATCH_ID = UUID.fromString("00000000-0000-0000-0000-000000000201");

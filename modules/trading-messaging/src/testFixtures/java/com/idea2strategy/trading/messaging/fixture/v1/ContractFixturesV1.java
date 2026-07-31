@@ -18,7 +18,6 @@ import java.util.UUID;
 
 public final class ContractFixturesV1 {
     public static final UUID BOT_ID = UUID.fromString("00000000-0000-0000-0000-000000000101");
-    public static final UUID STRATEGY_VERSION_ID = UUID.fromString("00000000-0000-0000-0000-000000000102");
     public static final UUID EVALUATION_ID = UUID.fromString("00000000-0000-0000-0000-000000000103");
     public static final UUID INSTRUMENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000104");
     public static final UUID CANDIDATE_BATCH_ID = UUID.fromString("00000000-0000-0000-0000-000000000201");
@@ -34,7 +33,6 @@ public final class ContractFixturesV1 {
     public static final String COST_POLICY_VERSION = "virtual-fill-cost-v1";
 
     public static final UUID CORRELATION_ID = UUID.fromString("00000000-0000-0000-0000-000000000801");
-    public static final UUID CAUSATION_ID = UUID.fromString("00000000-0000-0000-0000-000000000802");
     public static final UUID ACCEPTED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000411");
     public static final UUID STALE_ACCEPTED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000412");
     public static final UUID FUTURE_GAP_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000413");
@@ -183,7 +181,7 @@ public final class ContractFixturesV1 {
 
     public static FixtureDeliveryProjectionV1.DeliveryScenario deliveryScenario() {
         return new FixtureDeliveryProjectionV1.DeliveryScenario(
-            List.of(PARTIAL_FILL_EVENT_ID), 1, 2,
+            List.of(ACCEPTED_EVENT_ID, PARTIAL_FILL_EVENT_ID), 1, 2,
             FixtureDeliveryProjectionV1.DeliveryResult.DUPLICATE,
             FixtureDeliveryProjectionV1.DeliveryResult.STALE,
             "aggregate version gap: sequence gap"

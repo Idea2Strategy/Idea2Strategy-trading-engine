@@ -1,5 +1,5 @@
 {
-  "deliveryEventIds": ["00000000-0000-0000-0000-000000000501"],
+  "deliveryEventIds": ["00000000-0000-0000-0000-000000000411", "00000000-0000-0000-0000-000000000501"],
   "expectedTradeCount": 1,
   "expectedLedgerEntryCount": 2,
   "duplicateResult": "DUPLICATE",
