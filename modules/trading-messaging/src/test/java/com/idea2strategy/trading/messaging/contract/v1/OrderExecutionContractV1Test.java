@@ -14,6 +14,54 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class OrderExecutionContractV1Test {
 
     @Test
+    void enforcesExecutableParametersForEveryOrderType() {
+        assertThatCode(() -> parameters(null, null, null)
+            .validateFor(OrderExecutionContractV1.OrderType.MARKET)).doesNotThrowAnyException();
+        assertThatCode(() -> parameters("100", null, null)
+            .validateFor(OrderExecutionContractV1.OrderType.LIMIT)).doesNotThrowAnyException();
+        assertThatCode(() -> parameters(null, "99", null)
+            .validateFor(OrderExecutionContractV1.OrderType.STOP)).doesNotThrowAnyException();
+        assertThatCode(() -> parameters("100", "99", null)
+            .validateFor(OrderExecutionContractV1.OrderType.STOP_LIMIT)).doesNotThrowAnyException();
+        assertThatCode(() -> parameters(null, null, "0.05")
+            .validateFor(OrderExecutionContractV1.OrderType.TRAILING_STOP)).doesNotThrowAnyException();
+
+        assertThatThrownBy(() -> parameters(null, null, null)
+            .validateFor(OrderExecutionContractV1.OrderType.LIMIT))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("limitPrice");
+        assertThatThrownBy(() -> parameters("100", null, null)
+            .validateFor(OrderExecutionContractV1.OrderType.MARKET))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("MARKET");
+        assertThatThrownBy(() -> parameters(null, null, "1.01"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("trailPercent");
+    }
+
+    @Test
+    void requiresPositiveRequestedAndNonRejectedApprovedQuantities() {
+        assertThatThrownBy(() -> wholeShareIntent(
+            OrderExecutionContractV1.Side.BUY,
+            OrderExecutionContractV1.OrderType.MARKET,
+            "0",
+            "0",
+            OrderExecutionContractV1.IntentDecision.REJECTED,
+            "INVALID_REQUEST"
+        )).isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("requestedQuantity");
+        assertThatThrownBy(() -> wholeShareIntent(
+            OrderExecutionContractV1.Side.BUY,
+            OrderExecutionContractV1.OrderType.MARKET,
+            "1",
+            "0",
+            OrderExecutionContractV1.IntentDecision.ACCEPTED,
+            null
+        )).isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("approvedQuantity");
+    }
+
+    @Test
     void acceptsEligibleFractionalMarketDayLongIntent() {
         assertThatCode(this::validFractionalMarketDayIntent).doesNotThrowAnyException();
     }
@@ -185,7 +233,7 @@ class OrderExecutionContractV1Test {
             OrderExecutionContractV1.IntentDecision.REDUCED,
             "RISK_LIMIT"
         )).isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("REDUCED");
+            .hasMessageContaining("approvedQuantity");
         assertThatThrownBy(() -> wholeShareIntent(
             OrderExecutionContractV1.Side.BUY,
             OrderExecutionContractV1.OrderType.MARKET,
@@ -291,6 +339,7 @@ class OrderExecutionContractV1Test {
             id("66666666-6666-6666-6666-666666666666"),
             side,
             orderType,
+            parametersFor(orderType),
             OrderExecutionContractV1.TimeInForce.DAY,
             null,
             OrderExecutionContractV1.QuantityMode.WHOLE_SHARES,
@@ -319,6 +368,7 @@ class OrderExecutionContractV1Test {
             id("66666666-6666-6666-6666-666666666666"),
             side,
             orderType,
+            parametersFor(orderType),
             timeInForce,
             expiresAt,
             quantityMode,
@@ -336,5 +386,27 @@ class OrderExecutionContractV1Test {
 
     private UUID id(String value) {
         return UUID.fromString(value);
+    }
+
+    private OrderExecutionContractV1.OrderParameters parametersFor(OrderExecutionContractV1.OrderType orderType) {
+        return switch (orderType) {
+            case MARKET -> parameters(null, null, null);
+            case LIMIT -> parameters("100", null, null);
+            case STOP -> parameters(null, "99", null);
+            case STOP_LIMIT -> parameters("100", "99", null);
+            case TRAILING_STOP -> parameters(null, null, "0.05");
+        };
+    }
+
+    private OrderExecutionContractV1.OrderParameters parameters(
+        String limitPrice,
+        String stopPrice,
+        String trailPercent
+    ) {
+        return new OrderExecutionContractV1.OrderParameters(
+            limitPrice == null ? null : new CurrencyAmountV1("USD", new DecimalValueV1(limitPrice)),
+            stopPrice == null ? null : new CurrencyAmountV1("USD", new DecimalValueV1(stopPrice)),
+            trailPercent == null ? null : new DecimalValueV1(trailPercent)
+        );
     }
 }

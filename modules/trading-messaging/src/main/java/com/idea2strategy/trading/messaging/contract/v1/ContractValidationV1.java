@@ -45,10 +45,18 @@ public final class ContractValidationV1 {
         return value;
     }
 
+    public static DecimalValueV1 positiveDecimal(DecimalValueV1 value, String fieldName) {
+        required(value, fieldName);
+        if (value.asBigDecimal().signum() <= 0) {
+            throw new IllegalArgumentException(fieldName + " must be positive");
+        }
+        return value;
+    }
+
     public static String currencyCode(String value, String fieldName) {
         requiredText(value, fieldName);
         if (!CURRENCY_CODE.matcher(value).matches()) {
-            throw new IllegalArgumentException(fieldName + " must be an uppercase ISO 4217 currency code");
+            throw new IllegalArgumentException(fieldName + " must use three uppercase ASCII letters");
         }
         return value;
     }

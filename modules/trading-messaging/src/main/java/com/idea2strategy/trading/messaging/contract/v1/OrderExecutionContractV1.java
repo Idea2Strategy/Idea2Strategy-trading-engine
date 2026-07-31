@@ -23,6 +23,47 @@ public final class OrderExecutionContractV1 {
 
     public enum IntentDecision { ACCEPTED, REDUCED, REJECTED }
 
+    public record OrderParameters(
+        CurrencyAmountV1 limitPrice,
+        CurrencyAmountV1 stopPrice,
+        DecimalValueV1 trailPercent
+    ) {
+        public OrderParameters {
+            if (limitPrice != null) {
+                ContractValidationV1.positiveDecimal(limitPrice.amount(), "limitPrice");
+            }
+            if (stopPrice != null) {
+                ContractValidationV1.positiveDecimal(stopPrice.amount(), "stopPrice");
+            }
+            if (trailPercent != null) {
+                ContractValidationV1.positiveDecimal(trailPercent, "trailPercent");
+                if (trailPercent.asBigDecimal().compareTo(BigDecimal.ONE) > 0) {
+                    throw new IllegalArgumentException("trailPercent must be at most 1");
+                }
+            }
+        }
+
+        public void validateFor(OrderType orderType) {
+            ContractValidationV1.required(orderType, "orderType");
+            boolean valid = switch (orderType) {
+                case MARKET -> limitPrice == null && stopPrice == null && trailPercent == null;
+                case LIMIT -> limitPrice != null && stopPrice == null && trailPercent == null;
+                case STOP -> limitPrice == null && stopPrice != null && trailPercent == null;
+                case STOP_LIMIT -> limitPrice != null && stopPrice != null && trailPercent == null;
+                case TRAILING_STOP -> limitPrice == null && stopPrice == null && trailPercent != null;
+            };
+            if (!valid) {
+                throw new IllegalArgumentException(switch (orderType) {
+                    case MARKET -> "MARKET orders do not allow limitPrice, stopPrice, or trailPercent";
+                    case LIMIT -> "LIMIT orders require only limitPrice";
+                    case STOP -> "STOP orders require only stopPrice";
+                    case STOP_LIMIT -> "STOP_LIMIT orders require limitPrice and stopPrice only";
+                    case TRAILING_STOP -> "TRAILING_STOP orders require only trailPercent";
+                });
+            }
+        }
+    }
+
     public record CostPolicy(String version, DecimalValueV1 feeRate, DecimalValueV1 slippageRate) {
         public CostPolicy {
             ContractValidationV1.requiredText(version, "version");
@@ -43,6 +84,7 @@ public final class OrderExecutionContractV1 {
         UUID instrumentId,
         Side side,
         OrderType orderType,
+        OrderParameters orderParameters,
         TimeInForce timeInForce,
         Instant expiresAt,
         QuantityMode quantityMode,
@@ -58,6 +100,7 @@ public final class OrderExecutionContractV1 {
             ContractValidationV1.required(instrumentId, "instrumentId");
             ContractValidationV1.required(side, "side");
             ContractValidationV1.required(orderType, "orderType");
+            ContractValidationV1.required(orderParameters, "orderParameters").validateFor(orderType);
             ContractValidationV1.required(timeInForce, "timeInForce");
             validateExpiry(timeInForce, expiresAt);
             ContractValidationV1.required(quantityMode, "quantityMode");
@@ -118,13 +161,19 @@ public final class OrderExecutionContractV1 {
         ) {
             var requested = requestedQuantity.asBigDecimal();
             var approved = approvedQuantity.asBigDecimal();
+            ContractValidationV1.positiveDecimal(requestedQuantity, "requestedQuantity");
             switch (decision) {
                 case ACCEPTED -> {
+                    ContractValidationV1.positiveDecimal(approvedQuantity, "approvedQuantity");
                     if (approved.compareTo(requested) != 0) {
                         throw new IllegalArgumentException("ACCEPTED intents must approve the requested quantity");
                     }
+                    if (reasonCode != null) {
+                        throw new IllegalArgumentException("reasonCode is allowed only for REDUCED and REJECTED intents");
+                    }
                 }
                 case REDUCED -> {
+                    ContractValidationV1.positiveDecimal(approvedQuantity, "approvedQuantity");
                     if (approved.compareTo(BigDecimal.ZERO) <= 0 || approved.compareTo(requested) >= 0) {
                         throw new IllegalArgumentException("REDUCED intents must approve a positive quantity below the requested quantity");
                     }

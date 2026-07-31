@@ -61,6 +61,7 @@ public final class ContractFixturesV1 {
                 UUID.nameUUIDFromBytes(("intent-" + candidate.candidateId()).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
                 candidate.candidateId(), candidate.instrumentId(), side(candidate.side()),
                 candidate.limitPrice() == null ? OrderExecutionContractV1.OrderType.MARKET : OrderExecutionContractV1.OrderType.LIMIT,
+                candidate.limitPrice() == null ? marketParameters() : limitParameters(decimal(candidate.limitPrice())),
                 OrderExecutionContractV1.TimeInForce.DAY, null, OrderExecutionContractV1.QuantityMode.WHOLE_SHARES,
                 decimal(candidate.quantity()), decimal(candidate.quantity()), OrderExecutionContractV1.IntentDecision.ACCEPTED,
                 null, costPolicy()
@@ -166,6 +167,16 @@ public final class ContractFixturesV1 {
         return new DecimalValueV1(value.stripTrailingZeros().toPlainString());
     }
 
+    private static OrderExecutionContractV1.OrderParameters marketParameters() {
+        return new OrderExecutionContractV1.OrderParameters(null, null, null);
+    }
+
+    private static OrderExecutionContractV1.OrderParameters limitParameters(DecimalValueV1 limitPrice) {
+        return new OrderExecutionContractV1.OrderParameters(
+            new CurrencyAmountV1("USD", limitPrice), null, null
+        );
+    }
+
     private static OrderExecutionContractV1.Intent intent(
         String intentId, String candidateId, OrderExecutionContractV1.Side side, String requestedQuantity, String approvedQuantity,
         OrderExecutionContractV1.IntentDecision decision, String reasonCode, OrderExecutionContractV1.QuantityMode quantityMode,
@@ -173,7 +184,7 @@ public final class ContractFixturesV1 {
     ) {
         return new OrderExecutionContractV1.Intent(
             UUID.fromString(intentId), UUID.fromString(candidateId), INSTRUMENT_ID, side,
-            OrderExecutionContractV1.OrderType.MARKET, OrderExecutionContractV1.TimeInForce.DAY, null, quantityMode,
+            OrderExecutionContractV1.OrderType.MARKET, marketParameters(), OrderExecutionContractV1.TimeInForce.DAY, null, quantityMode,
             new DecimalValueV1(requestedQuantity), new DecimalValueV1(approvedQuantity), decision, reasonCode, costPolicy
         );
     }
