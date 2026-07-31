@@ -2,6 +2,7 @@ package com.idea2strategy.trading.messaging.fixture.v1;
 
 import com.idea2strategy.trading.messaging.contract.v1.ContractValidationV1;
 import com.idea2strategy.trading.messaging.contract.v1.OrderLifecycleContractV1;
+import com.idea2strategy.trading.messaging.contract.v1.SettlementContractV1;
 import com.idea2strategy.trading.messaging.contract.v1.TradingEnvelopeV1;
 
 import java.math.BigDecimal;
@@ -22,6 +23,11 @@ public final class FixtureDeliveryProjectionV1 {
     private final Map<UUID, UUID> candidateIdByAggregate = new HashMap<>();
     private final Map<UUID, BigDecimal> orderQuantityByAggregate = new HashMap<>();
     private final Map<UUID, BigDecimal> filledQuantityByAggregate = new HashMap<>();
+    private final Map<UUID, SettlementContractV1.EventType> settlementStateByAggregate = new HashMap<>();
+    private final Map<UUID, UUID> settlementIdByAggregate = new HashMap<>();
+    private final Map<UUID, UUID> settlementBotIdByAggregate = new HashMap<>();
+    private final Map<UUID, Set<UUID>> settlementOrderIdsByAggregate = new HashMap<>();
+    private final Map<UUID, Integer> settlementAttemptByAggregate = new HashMap<>();
     private int tradeCount;
     private int ledgerEntryCount;
 
@@ -41,6 +47,8 @@ public final class FixtureDeliveryProjectionV1 {
 
         if (envelope.payload() instanceof OrderLifecycleContractV1.Event event) {
             validateLifecycle(envelope.aggregateId(), event);
+        } else if (envelope.payload() instanceof SettlementContractV1.Event event) {
+            validateSettlement(envelope.aggregateId(), event);
         }
 
         appliedEventIds.add(envelope.eventId());
@@ -51,6 +59,8 @@ public final class FixtureDeliveryProjectionV1 {
                 tradeCount++;
                 ledgerEntryCount += event.ledgerTransaction().entries().size();
             }
+        } else if (envelope.payload() instanceof SettlementContractV1.Event event) {
+            applySettlement(envelope.aggregateId(), event);
         }
         return DeliveryResult.APPLIED;
     }
@@ -112,6 +122,54 @@ public final class FixtureDeliveryProjectionV1 {
             || type == OrderLifecycleContractV1.EventType.CANCELLED
             || type == OrderLifecycleContractV1.EventType.EXPIRED
             || type == OrderLifecycleContractV1.EventType.REJECTED;
+    }
+
+    private void validateSettlement(UUID aggregateId, SettlementContractV1.Event event) {
+        var current = settlementStateByAggregate.get(aggregateId);
+        if (current == null) {
+            if (event.type() != SettlementContractV1.EventType.REQUESTED || event.attempt() != 1) {
+                throw new IllegalStateException("settlement history must start with REQUESTED attempt 1");
+            }
+            return;
+        }
+
+        if (current == SettlementContractV1.EventType.COMPLETED) {
+            throw new IllegalStateException("settlement cannot transition after terminal state COMPLETED");
+        }
+        if (!event.settlementId().equals(settlementIdByAggregate.get(aggregateId))) {
+            throw new IllegalStateException("settlementId changed within a settlement history");
+        }
+        if (!event.botId().equals(settlementBotIdByAggregate.get(aggregateId))) {
+            throw new IllegalStateException("botId changed within a settlement history");
+        }
+        if (!new HashSet<>(event.affectedOrderIds()).equals(settlementOrderIdsByAggregate.get(aggregateId))) {
+            throw new IllegalStateException("affectedOrderIds changed within a settlement history");
+        }
+
+        int currentAttempt = settlementAttemptByAggregate.get(aggregateId);
+        if (current == SettlementContractV1.EventType.REQUESTED) {
+            if (event.type() != SettlementContractV1.EventType.FAILED) {
+                throw new IllegalStateException("settlement transition must be REQUESTED to FAILED");
+            }
+            if (event.attempt() != currentAttempt) {
+                throw new IllegalStateException("FAILED settlement attempt must match the requested attempt");
+            }
+        } else if (current == SettlementContractV1.EventType.FAILED) {
+            if (event.type() != SettlementContractV1.EventType.COMPLETED) {
+                throw new IllegalStateException("settlement transition must be FAILED to COMPLETED");
+            }
+            if (event.attempt() != currentAttempt + 1) {
+                throw new IllegalStateException("COMPLETED settlement attempt must advance after failure");
+            }
+        }
+    }
+
+    private void applySettlement(UUID aggregateId, SettlementContractV1.Event event) {
+        settlementStateByAggregate.put(aggregateId, event.type());
+        settlementIdByAggregate.putIfAbsent(aggregateId, event.settlementId());
+        settlementBotIdByAggregate.putIfAbsent(aggregateId, event.botId());
+        settlementOrderIdsByAggregate.putIfAbsent(aggregateId, Set.copyOf(event.affectedOrderIds()));
+        settlementAttemptByAggregate.put(aggregateId, event.attempt());
     }
 
     public int tradeCount() {
