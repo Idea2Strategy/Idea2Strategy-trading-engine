@@ -1,5 +1,6 @@
 package com.idea2strategy.trading.messaging.contract.v1;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
@@ -65,6 +66,8 @@ public final class OrderExecutionContractV1 {
             ContractValidationV1.required(decision, "decision");
             ContractValidationV1.required(costPolicy, "costPolicy");
             validateQuantityMode(side, orderType, timeInForce, quantityMode);
+            validateWholeShareQuantities(quantityMode, requestedQuantity, approvedQuantity);
+            validateDecision(decision, requestedQuantity, approvedQuantity, reasonCode);
         }
 
         private static void validateExpiry(TimeInForce timeInForce, Instant expiresAt) {
@@ -91,6 +94,50 @@ public final class OrderExecutionContractV1 {
                 throw new IllegalArgumentException("fractional and notional orders require eligible long MARKET/DAY orders");
             }
         }
+
+        private static void validateWholeShareQuantities(
+            QuantityMode quantityMode,
+            DecimalValueV1 requestedQuantity,
+            DecimalValueV1 approvedQuantity
+        ) {
+            if (quantityMode == QuantityMode.WHOLE_SHARES
+                && (!isWholeNumber(requestedQuantity) || !isWholeNumber(approvedQuantity))) {
+                throw new IllegalArgumentException("whole shares require mathematically integral quantities");
+            }
+        }
+
+        private static boolean isWholeNumber(DecimalValueV1 quantity) {
+            return quantity.asBigDecimal().stripTrailingZeros().scale() <= 0;
+        }
+
+        private static void validateDecision(
+            IntentDecision decision,
+            DecimalValueV1 requestedQuantity,
+            DecimalValueV1 approvedQuantity,
+            String reasonCode
+        ) {
+            var requested = requestedQuantity.asBigDecimal();
+            var approved = approvedQuantity.asBigDecimal();
+            switch (decision) {
+                case ACCEPTED -> {
+                    if (approved.compareTo(requested) != 0) {
+                        throw new IllegalArgumentException("ACCEPTED intents must approve the requested quantity");
+                    }
+                }
+                case REDUCED -> {
+                    if (approved.compareTo(BigDecimal.ZERO) <= 0 || approved.compareTo(requested) >= 0) {
+                        throw new IllegalArgumentException("REDUCED intents must approve a positive quantity below the requested quantity");
+                    }
+                    ContractValidationV1.requiredText(reasonCode, "reasonCode");
+                }
+                case REJECTED -> {
+                    if (approved.compareTo(BigDecimal.ZERO) != 0) {
+                        throw new IllegalArgumentException("REJECTED intents must approve zero quantity");
+                    }
+                    ContractValidationV1.requiredText(reasonCode, "reasonCode");
+                }
+            }
+        }
     }
 
     public record IntentBatch(UUID batchId, UUID botId, UUID evaluationId, List<Intent> intents) {
@@ -98,11 +145,14 @@ public final class OrderExecutionContractV1 {
             ContractValidationV1.required(batchId, "batchId");
             ContractValidationV1.required(botId, "botId");
             ContractValidationV1.required(evaluationId, "evaluationId");
-            intents = List.copyOf(ContractValidationV1.required(intents, "intents"));
+            intents = ContractValidationV1.required(intents, "intents");
+            for (Intent intent : intents) {
+                ContractValidationV1.required(intent, "intent");
+            }
+            intents = List.copyOf(intents);
 
             var intentIds = new HashSet<UUID>();
             for (Intent intent : intents) {
-                ContractValidationV1.required(intent, "intent");
                 if (!intentIds.add(intent.intentId())) {
                     throw new IllegalArgumentException("duplicate intentId");
                 }

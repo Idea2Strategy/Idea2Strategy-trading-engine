@@ -28,6 +28,8 @@ public final class OrderLifecycleContractV1 {
             }
             if (requiresReasonCode(type)) {
                 ContractValidationV1.requiredText(reasonCode, "reasonCode");
+            } else if (reasonCode != null) {
+                throw new IllegalArgumentException("reasonCode is allowed only for cancelled, expired, and rejected events");
             }
         }
 
