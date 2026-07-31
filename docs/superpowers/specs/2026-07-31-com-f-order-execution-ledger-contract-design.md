@@ -34,8 +34,8 @@ Every message uses a common envelope containing:
 
 The v1 payload families are:
 
-1. `com.idea2strategy.trading.messaging.evaluation.OrderCandidateBatch`: C's producer-owned inbound batch, consumed directly by F without an independently invented wire type. Its candidate shape is `OrderCandidate(candidateId, instrumentId, OrderSide, BigDecimal quantity, BigDecimal limitPrice, List<String> reasonCodes)`.
-2. `OrderIntentBatchV1`: F's normalized result after candidate validation, including accepted, reduced, and rejected intents with explicit reasons.
+1. `com.idea2strategy.trading.messaging.evaluation.OrderCandidateBatch` and `EvaluationResult`: C's producer-owned inbound result, consumed together by F without an independently invented wire type or synthetic bot identity. The candidate shape is `OrderCandidate(candidateId, instrumentId, OrderSide, BigDecimal quantity, BigDecimal limitPrice, List<String> reasonCodes)`.
+2. `OrderIntentBatchV1`: F's normalized result after candidate validation. The canonical intent is derived from both upstream resources; accepted, reduced, and rejected examples remain in a separately named decision-scenario resource.
 3. `OrderEventV1`: accepted, partially filled, filled, cancelled, expired, and rejected order lifecycle events.
 4. `SettlementEventV1`: settlement requested, completed, and failed events with retry-safe settlement identity.
 5. `LedgerTransactionV1`: a transaction and its entries, with account, direction, currency, amount, and source event identity.
@@ -50,7 +50,7 @@ Decimal wire values are encoded as canonical strings. This avoids accidental bin
 
 ## Ledger invariant
 
-Each ledger transaction contains at least two entries. Debit and credit totals must be equal at the contract boundary. Entries retain the source event ID so a consumer can rebuild the official ledger and reject a duplicate delivery without inventing a second transaction.
+Each ledger transaction contains at least two entries. Debit and credit totals must be equal at the contract boundary. Entries retain the source fill event ID so a consumer can rebuild the official ledger and reject a duplicate delivery without inventing a second transaction. The standalone ledger envelope republishes the exact transaction embedded in the partial-fill event: transaction `601`, entries `611`/`612`, and fill source `501`. Its envelope `eventId` identifies the publication delivery, while `causationId` identifies the fill that caused the posting and therefore equals every ledger `sourceEventId`.
 
 The fixture set contains one balanced partial-fill transaction and invalid examples used only inside tests to prove that an unbalanced transaction is rejected.
 
@@ -63,7 +63,7 @@ A reusable test-fixture projection consumes envelopes by `eventId` and `aggregat
 - the next version is applied once;
 - a future version with a gap is rejected as out of order instead of being silently applied.
 
-The first red test delivers accepted v1, then the same partial-fill v2 envelope twice and expects one trade and one set of ledger entries. The projection also enforces accepted→partial→filled sequencing, cumulative quantity bounds, and terminal-state immutability. Cancellation and rejection use independent order aggregates rather than impossible branches after a filled order.
+The first red test delivers accepted v1, then the same partial-fill v2 envelope twice and expects one trade and one set of ledger entries. The projection also enforces accepted→partial→filled sequencing, stable `intentId` and `candidateId`, cumulative quantity bounds, and terminal-state immutability. Cancellation and rejection use independent order aggregates rather than impossible branches after a filled order. Settlement projection state retains settlement, bot, and affected-order identities and permits only REQUESTED attempt 1 → FAILED at the same attempt → COMPLETED at the next attempt; COMPLETED is terminal.
 
 This projection is test-fixture support, not the production trading engine. F01 will later implement durable persistence and recovery using the same contract behavior.
 
@@ -71,15 +71,16 @@ This projection is test-fixture support, not the production trading engine. F01 
 
 The JSON resources provide coherent examples across related order lifecycles:
 
-1. C's upstream `contracts/v1/order-candidate-batch.json`, loaded as `OrderCandidateBatch` by a consumer contract test;
-2. intent batch with accepted, reduced, and rejected examples linked to direct C candidate identities;
-3. accepted→partial→filled order history;
-4. a separate accepted→cancelled history;
-5. a separate rejected history;
-6. settlement requested→failed attempt→successful retry history;
-7. balanced ledger transaction with unique entry IDs and envelope-consistent source identity;
-8. duplicate and out-of-order delivery scenario with expected applied IDs and counts;
-9. executable valid/rejected order-intent matrix.
+1. C's upstream `contracts/v1/order-candidate-batch.json` and `contracts/v1/evaluation-result.json`, loaded as their producer-owned types by a resource-to-resource consumer contract test;
+2. one canonical BUY/LIMIT intent retaining the upstream evaluation, bot, candidate, instrument, quantity 2, and limit 210.12;
+3. separately named accepted/reduced/rejected decision scenarios;
+4. accepted→partial→filled order history linked to that canonical intent;
+5. a separate accepted→cancelled history;
+6. a separate rejected history;
+7. settlement requested→failed attempt→successful retry history;
+8. a standalone republication of the partial-fill ledger transaction, preserving transaction and entry identities;
+9. duplicate and out-of-order delivery scenario with expected applied IDs and counts;
+10. executable valid/rejected order-intent matrix.
 
 Every resource is deserialized to its Java record and serialized back to the same normalized JSON tree. Tests also verify unique fixture IDs, UTC timestamps, policy-version presence, order-type/time-in-force combinations, decimal-mode examples, and balanced ledger totals.
 
@@ -92,11 +93,13 @@ Every resource is deserialized to its Java record and serialized back to the sam
 - Duplicate events are ignored by event identity.
 - Stale events are ignored; sequence gaps are reported explicitly.
 - Post-terminal lifecycle transitions and overfills are rejected.
+- Order lifecycle `intentId` and `candidateId` drift is rejected independently.
+- Settlement bot/order-set drift, invalid retry attempts, and post-completion transitions are rejected.
 - Unbalanced ledger transactions are rejected before publication or consumption.
 
 ## Compatibility and ownership
 
-F owns order, execution, settlement, and ledger shapes. C owns `evaluation.OrderCandidate` and `evaluation.OrderCandidateBatch`; F consumes those exact types and the upstream `contracts/v1/order-candidate-batch.json` resource. A future incompatible boundary requires a clearly versioned adapter and coordinated review, not a parallel unversioned candidate contract. Consumers may depend on the published F v1 types and JSON examples, but must not depend on fixture-builder internals.
+F owns order, execution, settlement, and ledger shapes. C owns `evaluation.OrderCandidate`, `evaluation.OrderCandidateBatch`, and `evaluation.EvaluationResult`; F consumes those exact types and both upstream JSON resources. A future incompatible boundary requires a clearly versioned adapter and coordinated review, not a parallel unversioned candidate contract. Consumers may depend on the published F v1 types and JSON examples, but must not depend on fixture-builder internals.
 
 Compatible optional-property additions are ignored by the explicitly configured Jackson fixture mapper. Unknown enum values remain strict and raise `JsonMappingException`. Renaming required fields, changing numeric meaning, or reinterpreting an existing enum requires a new contract version and coordinated consumer tests.
 
