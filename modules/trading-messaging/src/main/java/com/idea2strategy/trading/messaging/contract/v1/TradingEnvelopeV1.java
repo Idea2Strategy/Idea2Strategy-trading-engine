@@ -58,6 +58,13 @@ public record TradingEnvelopeV1<T>(
             requireContractRoute(schemaVersion, eventType, "ledger.transaction");
             requireAggregate(aggregateId, transaction.transactionId());
             validateLedgerPublication(eventId, occurredAt, transaction);
+        } else if (payload instanceof SettlementContractV1.Event event) {
+            requireContractRoute(schemaVersion, eventType, switch (event.type()) {
+                case REQUESTED -> "settlement.requested";
+                case FAILED -> "settlement.failed";
+                case COMPLETED -> "settlement.completed";
+            });
+            requireAggregate(aggregateId, event.settlementId());
         }
     }
 

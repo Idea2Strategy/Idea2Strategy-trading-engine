@@ -42,7 +42,9 @@ public final class ContractFixturesV1 {
     public static final UUID CANCELLATION_ACCEPTED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000414");
     public static final UUID CANCELLED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000503");
     public static final UUID REJECTED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000504");
-    public static final UUID SETTLEMENT_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000702");
+    public static final UUID SETTLEMENT_REQUESTED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000702");
+    public static final UUID SETTLEMENT_FAILED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000703");
+    public static final UUID SETTLEMENT_COMPLETED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000704");
     public static final UUID LEDGER_ENVELOPE_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000603");
 
     private ContractFixturesV1() {
@@ -149,9 +151,28 @@ public final class ContractFixturesV1 {
         return envelope("order.rejected", REJECTED_EVENT_ID, "rejected-" + REJECTED_EVENT_ID, REJECTED_ORDER_ID, 1, INTENT_BATCH_ID, event);
     }
 
+    public static TradingEnvelopeV1<SettlementContractV1.Event> settlementRequestedEnvelope() {
+        var event = new SettlementContractV1.Event(SETTLEMENT_ID, BOT_ID, SettlementContractV1.EventType.REQUESTED, null, 1, List.of(ORDER_ID));
+        return envelopeAt(
+            "settlement.requested", SETTLEMENT_REQUESTED_EVENT_ID, "settlement-" + SETTLEMENT_ID + "-request",
+            SETTLEMENT_ID, 1, FILLED_EVENT_ID, FIXTURE_TIME.plusSeconds(1), event
+        );
+    }
+
+    public static TradingEnvelopeV1<SettlementContractV1.Event> settlementFailedEnvelope() {
+        var event = new SettlementContractV1.Event(SETTLEMENT_ID, BOT_ID, SettlementContractV1.EventType.FAILED, "CLEARING_TIMEOUT", 1, List.of(ORDER_ID));
+        return envelopeAt(
+            "settlement.failed", SETTLEMENT_FAILED_EVENT_ID, "settlement-" + SETTLEMENT_ID + "-attempt-1",
+            SETTLEMENT_ID, 2, SETTLEMENT_REQUESTED_EVENT_ID, FIXTURE_TIME.plusSeconds(2), event
+        );
+    }
+
     public static TradingEnvelopeV1<SettlementContractV1.Event> settlementCompletedEnvelope() {
-        var event = new SettlementContractV1.Event(SETTLEMENT_ID, BOT_ID, SettlementContractV1.EventType.COMPLETED, null, 1, List.of(ORDER_ID));
-        return envelope("settlement.completed", SETTLEMENT_EVENT_ID, "settlement-completed-" + SETTLEMENT_ID, SETTLEMENT_ID, 1, FILLED_EVENT_ID, event);
+        var event = new SettlementContractV1.Event(SETTLEMENT_ID, BOT_ID, SettlementContractV1.EventType.COMPLETED, null, 2, List.of(ORDER_ID));
+        return envelopeAt(
+            "settlement.completed", SETTLEMENT_COMPLETED_EVENT_ID, "settlement-" + SETTLEMENT_ID + "-attempt-2",
+            SETTLEMENT_ID, 3, SETTLEMENT_FAILED_EVENT_ID, FIXTURE_TIME.plusSeconds(3), event
+        );
     }
 
     public static TradingEnvelopeV1<LedgerContractV1.Transaction> ledgerTransactionEnvelope() {
@@ -250,8 +271,21 @@ public final class ContractFixturesV1 {
         UUID causationId,
         T payload
     ) {
+        return envelopeAt(eventType, eventId, idempotencyKey, aggregateId, aggregateVersion, causationId, FIXTURE_TIME, payload);
+    }
+
+    private static <T> TradingEnvelopeV1<T> envelopeAt(
+        String eventType,
+        UUID eventId,
+        String idempotencyKey,
+        UUID aggregateId,
+        long aggregateVersion,
+        UUID causationId,
+        Instant occurredAt,
+        T payload
+    ) {
         return new TradingEnvelopeV1<>(
-            "trading.v1", eventType, eventId, FIXTURE_TIME, "trading-worker", CORRELATION_ID, causationId,
+            "trading.v1", eventType, eventId, occurredAt, "trading-worker", CORRELATION_ID, causationId,
             idempotencyKey, aggregateId, aggregateVersion, payload
         );
     }

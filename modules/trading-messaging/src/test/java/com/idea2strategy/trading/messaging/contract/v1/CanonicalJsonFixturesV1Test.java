@@ -36,7 +36,7 @@ class CanonicalJsonFixturesV1Test {
     void canonicalEnvelopeEventIdsAreUnique() {
         var eventIds = ContractJsonFixtureLoaderV1.canonicalEnvelopeEventIds();
 
-        assertThat(eventIds).hasSize(9);
+        assertThat(eventIds).hasSize(11);
         assertThat(new HashSet<>(eventIds)).hasSameSizeAs(eventIds);
     }
 
@@ -89,6 +89,10 @@ class CanonicalJsonFixturesV1Test {
             .isEqualTo(ContractFixturesV1.cancelledEnvelope());
         assertThat(read("order-rejected.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}))
             .isEqualTo(ContractFixturesV1.rejectedEnvelope());
+        assertThat(read("settlement-requested.json", new TypeReference<TradingEnvelopeV1<SettlementContractV1.Event>>() {}))
+            .isEqualTo(ContractFixturesV1.settlementRequestedEnvelope());
+        assertThat(read("settlement-failed.json", new TypeReference<TradingEnvelopeV1<SettlementContractV1.Event>>() {}))
+            .isEqualTo(ContractFixturesV1.settlementFailedEnvelope());
         assertThat(read("settlement-completed.json", new TypeReference<TradingEnvelopeV1<SettlementContractV1.Event>>() {}))
             .isEqualTo(ContractFixturesV1.settlementCompletedEnvelope());
         assertThat(read("ledger-transaction.json", new TypeReference<TradingEnvelopeV1<LedgerContractV1.Transaction>>() {}))
@@ -106,6 +110,8 @@ class CanonicalJsonFixturesV1Test {
             Arguments.of("order-filled.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
             Arguments.of("order-cancelled.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
             Arguments.of("order-rejected.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
+            Arguments.of("settlement-requested.json", new TypeReference<TradingEnvelopeV1<SettlementContractV1.Event>>() {}),
+            Arguments.of("settlement-failed.json", new TypeReference<TradingEnvelopeV1<SettlementContractV1.Event>>() {}),
             Arguments.of("settlement-completed.json", new TypeReference<TradingEnvelopeV1<SettlementContractV1.Event>>() {}),
             Arguments.of("ledger-transaction.json", new TypeReference<TradingEnvelopeV1<LedgerContractV1.Transaction>>() {}),
             Arguments.of("delivery-scenario.json", new TypeReference<FixtureDeliveryProjectionV1.DeliveryScenario>() {})

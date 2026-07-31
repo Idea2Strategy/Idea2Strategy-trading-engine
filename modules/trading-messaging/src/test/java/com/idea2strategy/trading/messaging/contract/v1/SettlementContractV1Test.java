@@ -1,5 +1,7 @@
 package com.idea2strategy.trading.messaging.contract.v1;
 
+import com.idea2strategy.trading.messaging.fixture.v1.ContractFixturesV1;
+import com.idea2strategy.trading.messaging.fixture.v1.FixtureDeliveryProjectionV1;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -10,6 +12,50 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SettlementContractV1Test {
+
+    @Test
+    void requestedFailedAndSuccessfulRetryUseOneSequentialSettlementHistory() {
+        var requested = ContractFixturesV1.settlementRequestedEnvelope();
+        var failed = ContractFixturesV1.settlementFailedEnvelope();
+        var completed = ContractFixturesV1.settlementCompletedEnvelope();
+        var projection = new FixtureDeliveryProjectionV1();
+
+        assertThat(requested.payload().settlementId()).isEqualTo(failed.payload().settlementId()).isEqualTo(completed.payload().settlementId());
+        assertThat(requested.aggregateVersion()).isEqualTo(1);
+        assertThat(failed.aggregateVersion()).isEqualTo(2);
+        assertThat(completed.aggregateVersion()).isEqualTo(3);
+        assertThat(failed.payload().reasonCode()).isEqualTo("CLEARING_TIMEOUT");
+        assertThat(failed.payload().attempt()).isEqualTo(1);
+        assertThat(completed.payload().attempt()).isEqualTo(2);
+
+        assertThat(projection.accept(requested)).isEqualTo(FixtureDeliveryProjectionV1.DeliveryResult.APPLIED);
+        assertThat(projection.accept(requested)).isEqualTo(FixtureDeliveryProjectionV1.DeliveryResult.DUPLICATE);
+        var gapProjection = new FixtureDeliveryProjectionV1();
+        assertThat(gapProjection.accept(requested)).isEqualTo(FixtureDeliveryProjectionV1.DeliveryResult.APPLIED);
+        assertThatThrownBy(() -> gapProjection.accept(completed))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("sequence gap");
+        assertThat(projection.accept(failed)).isEqualTo(FixtureDeliveryProjectionV1.DeliveryResult.APPLIED);
+        assertThat(projection.accept(completed)).isEqualTo(FixtureDeliveryProjectionV1.DeliveryResult.APPLIED);
+    }
+
+    @Test
+    void settlementEnvelopeTypeAndAggregateMustMatchPayload() {
+        var requested = ContractFixturesV1.settlementRequestedEnvelope();
+
+        assertThatThrownBy(() -> new TradingEnvelopeV1<>(
+            requested.schemaVersion(), "settlement.completed", requested.eventId(), requested.occurredAt(), requested.producer(),
+            requested.correlationId(), requested.causationId(), requested.idempotencyKey(), requested.aggregateId(),
+            requested.aggregateVersion(), requested.payload()
+        )).isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("eventType");
+        assertThatThrownBy(() -> new TradingEnvelopeV1<>(
+            requested.schemaVersion(), requested.eventType(), requested.eventId(), requested.occurredAt(), requested.producer(),
+            requested.correlationId(), requested.causationId(), requested.idempotencyKey(), UUID.randomUUID(),
+            requested.aggregateVersion(), requested.payload()
+        )).isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("aggregateId");
+    }
 
     @Test
     void failedSettlementRequiresNonblankReasonCode() {

@@ -22,6 +22,8 @@ public final class ContractJsonFixtureLoaderV1 {
         "order-filled.json",
         "order-cancelled.json",
         "order-rejected.json",
+        "settlement-requested.json",
+        "settlement-failed.json",
         "settlement-completed.json",
         "ledger-transaction.json"
     );
