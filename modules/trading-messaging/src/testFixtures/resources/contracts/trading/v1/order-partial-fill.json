@@ -5,13 +5,16 @@
   "occurredAt": "2026-07-31T14:30:00Z",
   "producer": "trading-worker",
   "correlationId": "00000000-0000-0000-0000-000000000801",
-  "causationId": "00000000-0000-0000-0000-000000000802",
+  "causationId": "00000000-0000-0000-0000-000000000411",
   "idempotencyKey": "partial-fill-00000000-0000-0000-0000-000000000501",
   "aggregateId": "00000000-0000-0000-0000-000000000401",
-  "aggregateVersion": 1,
+  "aggregateVersion": 2,
   "payload": {
     "orderId": "00000000-0000-0000-0000-000000000401",
+    "intentId": "00000000-0000-0000-0000-000000000311",
+    "candidateId": "00000000-0000-0000-0000-000000000211",
     "type": "PARTIALLY_FILLED",
+    "orderQuantity": { "value": "10.5" },
     "fillQuantity": { "value": "2.5" },
     "fillPrice": { "currency": "USD", "amount": { "value": "100" } },
     "ledgerTransaction": {

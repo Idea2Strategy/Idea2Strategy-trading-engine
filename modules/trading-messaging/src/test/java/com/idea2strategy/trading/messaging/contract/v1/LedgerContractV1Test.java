@@ -12,6 +12,35 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LedgerContractV1Test {
 
+    private static final UUID SOURCE_EVENT_ID = UUID.fromString("62222222-2222-2222-2222-222222222222");
+
+    @Test
+    void rejectsZeroPostingAmountsAndDuplicateEntryIds() {
+        assertThatThrownBy(() -> debit("USD", "0"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("amount");
+
+        var duplicateId = UUID.fromString("63333333-3333-3333-3333-333333333333");
+        var amount = new CurrencyAmountV1("USD", new DecimalValueV1("100"));
+        assertThatThrownBy(() -> transaction(List.of(
+            new LedgerContractV1.Entry(duplicateId, "CASH", LedgerContractV1.Direction.DEBIT, amount, SOURCE_EVENT_ID),
+            new LedgerContractV1.Entry(duplicateId, "EXECUTED_ORDERS", LedgerContractV1.Direction.CREDIT, amount, SOURCE_EVENT_ID)
+        ))).isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("duplicate entryId");
+    }
+
+    @Test
+    void rejectsEntrySourceEventThatDiffersFromTransactionSource() {
+        var mismatchedSource = UUID.fromString("69999999-9999-9999-9999-999999999999");
+        var amount = new CurrencyAmountV1("USD", new DecimalValueV1("100"));
+
+        assertThatThrownBy(() -> transaction(List.of(
+            new LedgerContractV1.Entry(UUID.fromString("63333333-3333-3333-3333-333333333333"), "CASH", LedgerContractV1.Direction.DEBIT, amount, SOURCE_EVENT_ID),
+            new LedgerContractV1.Entry(UUID.fromString("64444444-4444-4444-4444-444444444444"), "EXECUTED_ORDERS", LedgerContractV1.Direction.CREDIT, amount, mismatchedSource)
+        ))).isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("sourceEventId");
+    }
+
     @Test
     void defensivelyCopiesTransactionEntries() {
         var entries = new ArrayList<>(balancedEntries());
@@ -61,7 +90,7 @@ class LedgerContractV1Test {
     private LedgerContractV1.Transaction transaction(List<LedgerContractV1.Entry> entries) {
         return new LedgerContractV1.Transaction(
             UUID.fromString("61111111-1111-1111-1111-111111111111"),
-            UUID.fromString("62222222-2222-2222-2222-222222222222"),
+            SOURCE_EVENT_ID,
             Instant.parse("2026-07-31T00:00:00Z"),
             entries
         );
@@ -103,7 +132,7 @@ class LedgerContractV1Test {
             accountCode,
             direction,
             new CurrencyAmountV1(currency, new DecimalValueV1(amount)),
-            UUID.fromString("65555555-5555-5555-5555-555555555555")
+            SOURCE_EVENT_ID
         );
     }
 }

@@ -17,6 +17,7 @@ public final class ContractJsonFixtureLoaderV1 {
     private static final List<String> ENVELOPE_RESOURCES = List.of(
         "intent-batch.json",
         "order-accepted.json",
+        "order-cancel-accepted.json",
         "order-partial-fill.json",
         "order-filled.json",
         "order-cancelled.json",

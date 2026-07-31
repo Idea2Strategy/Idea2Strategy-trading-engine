@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "trading.v1",
+  "eventType": "order.accepted",
+  "eventId": "00000000-0000-0000-0000-000000000414",
+  "occurredAt": "2026-07-31T14:30:00Z",
+  "producer": "trading-worker",
+  "correlationId": "00000000-0000-0000-0000-000000000801",
+  "causationId": "00000000-0000-0000-0000-000000000301",
+  "idempotencyKey": "accepted-00000000-0000-0000-0000-000000000414",
+  "aggregateId": "00000000-0000-0000-0000-000000000402",
+  "aggregateVersion": 1,
+  "payload": { "orderId": "00000000-0000-0000-0000-000000000402", "intentId": "00000000-0000-0000-0000-000000000312", "candidateId": "00000000-0000-0000-0000-000000000212", "type": "ACCEPTED", "orderQuantity": { "value": "10" }, "fillQuantity": null, "fillPrice": null, "ledgerTransaction": null, "reasonCode": null }
+}

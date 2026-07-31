@@ -48,6 +48,36 @@ class TradingEnvelopeV1Test {
     }
 
     @Test
+    void validatesLifecycleRouteAndNestedLedgerIdentityAndTime() {
+        var partial = ContractFixturesV1.partialFillEnvelope();
+
+        assertThatThrownBy(() -> new TradingEnvelopeV1<>(
+            partial.schemaVersion(), "order.filled", partial.eventId(), partial.occurredAt(), partial.producer(),
+            partial.correlationId(), partial.causationId(), partial.idempotencyKey(), partial.aggregateId(),
+            partial.aggregateVersion(), partial.payload()
+        )).hasMessageContaining("eventType");
+        assertThatThrownBy(() -> new TradingEnvelopeV1<>(
+            partial.schemaVersion(), partial.eventType(), UUID.fromString("87777777-7777-7777-7777-777777777777"),
+            partial.occurredAt(), partial.producer(), partial.correlationId(), partial.causationId(), partial.idempotencyKey(),
+            partial.aggregateId(), partial.aggregateVersion(), partial.payload()
+        )).hasMessageContaining("sourceEventId");
+
+        var transaction = partial.payload().ledgerTransaction();
+        var lateTransaction = new LedgerContractV1.Transaction(
+            transaction.transactionId(), transaction.sourceEventId(), partial.occurredAt().plusSeconds(1), transaction.entries()
+        );
+        var latePosting = new OrderLifecycleContractV1.Event(
+            partial.payload().orderId(), partial.payload().intentId(), partial.payload().candidateId(), partial.payload().type(),
+            partial.payload().orderQuantity(), partial.payload().fillQuantity(), partial.payload().fillPrice(), lateTransaction, null
+        );
+        assertThatThrownBy(() -> new TradingEnvelopeV1<>(
+            partial.schemaVersion(), partial.eventType(), partial.eventId(), partial.occurredAt(), partial.producer(),
+            partial.correlationId(), partial.causationId(), partial.idempotencyKey(), partial.aggregateId(),
+            partial.aggregateVersion(), latePosting
+        )).hasMessageContaining("postedAt");
+    }
+
+    @Test
     void rejectsInvalidRequiredMetadataAndNoncanonicalDecimals() {
         assertThatThrownBy(() -> envelopeWithSchemaVersion(" "))
             .hasMessageContaining("schemaVersion");

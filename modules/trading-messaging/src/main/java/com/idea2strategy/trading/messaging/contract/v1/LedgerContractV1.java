@@ -3,6 +3,7 @@ package com.idea2strategy.trading.messaging.contract.v1;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -25,6 +26,7 @@ public final class LedgerContractV1 {
             ContractValidationV1.requiredText(accountCode, "accountCode");
             ContractValidationV1.required(direction, "direction");
             ContractValidationV1.required(amount, "amount");
+            ContractValidationV1.positiveDecimal(amount.amount(), "amount");
             ContractValidationV1.required(sourceEventId, "sourceEventId");
         }
     }
@@ -43,7 +45,21 @@ public final class LedgerContractV1 {
             if (entries.size() < 2) {
                 throw new IllegalArgumentException("entries must contain at least two entries");
             }
+            validateEntryIdentity(sourceEventId, entries);
             validateBalanced(entries);
+        }
+
+        private static void validateEntryIdentity(UUID sourceEventId, List<Entry> entries) {
+            var entryIds = new HashSet<UUID>();
+            for (Entry entry : entries) {
+                ContractValidationV1.required(entry, "entry");
+                if (!entryIds.add(entry.entryId())) {
+                    throw new IllegalArgumentException("duplicate entryId");
+                }
+                if (!sourceEventId.equals(entry.sourceEventId())) {
+                    throw new IllegalArgumentException("entry sourceEventId must match transaction sourceEventId");
+                }
+            }
         }
 
         private static void validateBalanced(List<Entry> entries) {

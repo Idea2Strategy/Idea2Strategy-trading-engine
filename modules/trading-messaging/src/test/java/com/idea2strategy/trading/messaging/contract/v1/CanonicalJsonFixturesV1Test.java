@@ -36,8 +36,41 @@ class CanonicalJsonFixturesV1Test {
     void canonicalEnvelopeEventIdsAreUnique() {
         var eventIds = ContractJsonFixtureLoaderV1.canonicalEnvelopeEventIds();
 
-        assertThat(eventIds).hasSize(8);
+        assertThat(eventIds).hasSize(9);
         assertThat(new HashSet<>(eventIds)).hasSameSizeAs(eventIds);
+    }
+
+    @Test
+    void canonicalIdentityGraphLinksCandidateIntentOrderFillAndLedger() {
+        var candidates = ContractFixturesV1.candidateBatch();
+        var intents = read("intent-batch.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {});
+        var accepted = read("order-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {});
+        var partial = read("order-partial-fill.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {});
+        var filled = read("order-filled.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {});
+        var ledger = read("ledger-transaction.json", new TypeReference<TradingEnvelopeV1<LedgerContractV1.Transaction>>() {});
+
+        var acceptedIntent = intents.payload().intents().stream()
+            .filter(intent -> intent.intentId().equals(accepted.payload().intentId()))
+            .findFirst()
+            .orElseThrow();
+        assertThat(accepted.payload().candidateId()).isEqualTo(acceptedIntent.candidateId());
+        assertThat(candidates.candidates()).extracting(candidate -> candidate.candidateId())
+            .contains(acceptedIntent.candidateId());
+        assertThat(intents.causationId()).isEqualTo(candidates.batchId());
+        assertThat(accepted.causationId()).isEqualTo(intents.eventId());
+        assertThat(partial.causationId()).isEqualTo(accepted.eventId());
+        assertThat(filled.causationId()).isEqualTo(partial.eventId());
+        assertThat(ledger.causationId()).isEqualTo(partial.eventId());
+
+        var entryIds = Stream.of(
+                partial.payload().ledgerTransaction(),
+                filled.payload().ledgerTransaction(),
+                ledger.payload()
+            )
+            .flatMap(transaction -> transaction.entries().stream())
+            .map(LedgerContractV1.Entry::entryId)
+            .toList();
+        assertThat(new HashSet<>(entryIds)).hasSameSizeAs(entryIds);
     }
 
     @Test
@@ -46,6 +79,8 @@ class CanonicalJsonFixturesV1Test {
             .isEqualTo(ContractFixturesV1.intentBatchEnvelope());
         assertThat(read("order-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}))
             .isEqualTo(ContractFixturesV1.acceptedEnvelope());
+        assertThat(read("order-cancel-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}))
+            .isEqualTo(ContractFixturesV1.cancellationAcceptedEnvelope());
         assertThat(read("order-partial-fill.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}))
             .isEqualTo(ContractFixturesV1.partialFillEnvelope());
         assertThat(read("order-filled.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}))
@@ -66,6 +101,7 @@ class CanonicalJsonFixturesV1Test {
         return Stream.of(
             Arguments.of("intent-batch.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {}),
             Arguments.of("order-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
+            Arguments.of("order-cancel-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
             Arguments.of("order-partial-fill.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
             Arguments.of("order-filled.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
             Arguments.of("order-cancelled.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),

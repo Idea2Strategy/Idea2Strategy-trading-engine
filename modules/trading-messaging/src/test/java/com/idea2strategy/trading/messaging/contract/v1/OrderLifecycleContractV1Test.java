@@ -12,10 +12,42 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class OrderLifecycleContractV1Test {
 
     @Test
+    void requiresCrossMessageIdentityAndPositiveOrderAndFillQuantities() {
+        assertThatThrownBy(() -> new OrderLifecycleContractV1.Event(
+            UUID.fromString("71111111-1111-1111-1111-111111111111"),
+            null,
+            UUID.fromString("71333333-3333-3333-3333-333333333333"),
+            OrderLifecycleContractV1.EventType.ACCEPTED,
+            new DecimalValueV1("1"),
+            null,
+            null,
+            null,
+            null
+        )).isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("intentId");
+
+        assertThatThrownBy(() -> new OrderLifecycleContractV1.Event(
+            UUID.fromString("71111111-1111-1111-1111-111111111111"),
+            UUID.fromString("71222222-2222-2222-2222-222222222222"),
+            UUID.fromString("71333333-3333-3333-3333-333333333333"),
+            OrderLifecycleContractV1.EventType.PARTIALLY_FILLED,
+            new DecimalValueV1("1"),
+            new DecimalValueV1("0"),
+            new CurrencyAmountV1("USD", new DecimalValueV1("10")),
+            ledgerTransaction(),
+            null
+        )).isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("fillQuantity");
+    }
+
+    @Test
     void requiresCompleteFillPayloadForPartialAndFinalFills() {
         assertThatThrownBy(() -> new OrderLifecycleContractV1.Event(
             UUID.fromString("71111111-1111-1111-1111-111111111111"),
+            UUID.fromString("71222222-2222-2222-2222-222222222222"),
+            UUID.fromString("71333333-3333-3333-3333-333333333333"),
             OrderLifecycleContractV1.EventType.PARTIALLY_FILLED,
+            new DecimalValueV1("1"),
             null,
             null,
             null,
@@ -28,7 +60,10 @@ class OrderLifecycleContractV1Test {
     void permitsNoFillPayloadForCancellationWithReasonCode() {
         assertThatCode(() -> new OrderLifecycleContractV1.Event(
             UUID.fromString("71111111-1111-1111-1111-111111111111"),
+            UUID.fromString("71222222-2222-2222-2222-222222222222"),
+            UUID.fromString("71333333-3333-3333-3333-333333333333"),
             OrderLifecycleContractV1.EventType.CANCELLED,
+            new DecimalValueV1("1"),
             null,
             null,
             null,
@@ -40,7 +75,10 @@ class OrderLifecycleContractV1Test {
     void rejectsFillPayloadOnRejectedEventsAndMissingTerminalReasonCodes() {
         assertThatThrownBy(() -> new OrderLifecycleContractV1.Event(
             UUID.fromString("71111111-1111-1111-1111-111111111111"),
+            UUID.fromString("71222222-2222-2222-2222-222222222222"),
+            UUID.fromString("71333333-3333-3333-3333-333333333333"),
             OrderLifecycleContractV1.EventType.REJECTED,
+            new DecimalValueV1("1"),
             new DecimalValueV1("1"),
             new CurrencyAmountV1("USD", new DecimalValueV1("10")),
             null,
@@ -50,7 +88,10 @@ class OrderLifecycleContractV1Test {
 
         assertThatThrownBy(() -> new OrderLifecycleContractV1.Event(
             UUID.fromString("71111111-1111-1111-1111-111111111111"),
+            UUID.fromString("71222222-2222-2222-2222-222222222222"),
+            UUID.fromString("71333333-3333-3333-3333-333333333333"),
             OrderLifecycleContractV1.EventType.EXPIRED,
+            new DecimalValueV1("1"),
             null,
             null,
             null,
@@ -123,7 +164,10 @@ class OrderLifecycleContractV1Test {
     ) {
         return new OrderLifecycleContractV1.Event(
             UUID.fromString("71111111-1111-1111-1111-111111111111"),
+            UUID.fromString("71222222-2222-2222-2222-222222222222"),
+            UUID.fromString("71333333-3333-3333-3333-333333333333"),
             type,
+            new DecimalValueV1("1"),
             hasFillPayload ? new DecimalValueV1("1") : null,
             hasFillPayload ? new CurrencyAmountV1("USD", new DecimalValueV1("10")) : null,
             hasFillPayload ? ledgerTransaction() : null,

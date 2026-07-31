@@ -14,6 +14,7 @@ class DuplicatePartialFillDeliveryTest {
         var partialFill = ContractFixturesV1.partialFillEnvelope();
         var projection = new FixtureDeliveryProjectionV1();
 
+        assertThat(projection.accept(ContractFixturesV1.acceptedEnvelope())).isEqualTo(DeliveryResult.APPLIED);
         assertThat(projection.accept(partialFill)).isEqualTo(DeliveryResult.APPLIED);
         assertThat(projection.accept(partialFill)).isEqualTo(DeliveryResult.DUPLICATE);
         assertThat(projection.tradeCount()).isEqualTo(1);

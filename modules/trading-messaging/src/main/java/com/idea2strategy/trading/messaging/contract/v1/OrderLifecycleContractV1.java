@@ -10,7 +10,10 @@ public final class OrderLifecycleContractV1 {
 
     public record Event(
         UUID orderId,
+        UUID intentId,
+        UUID candidateId,
         EventType type,
+        DecimalValueV1 orderQuantity,
         DecimalValueV1 fillQuantity,
         CurrencyAmountV1 fillPrice,
         LedgerContractV1.Transaction ledgerTransaction,
@@ -18,10 +21,14 @@ public final class OrderLifecycleContractV1 {
     ) {
         public Event {
             ContractValidationV1.required(orderId, "orderId");
+            ContractValidationV1.required(intentId, "intentId");
+            ContractValidationV1.required(candidateId, "candidateId");
             ContractValidationV1.required(type, "type");
+            ContractValidationV1.positiveDecimal(orderQuantity, "orderQuantity");
             if (isFill(type)) {
-                ContractValidationV1.required(fillQuantity, "fillQuantity");
+                ContractValidationV1.positiveDecimal(fillQuantity, "fillQuantity");
                 ContractValidationV1.required(fillPrice, "fillPrice");
+                ContractValidationV1.positiveDecimal(fillPrice.amount(), "fillPrice");
                 ContractValidationV1.required(ledgerTransaction, "ledgerTransaction");
             } else if (fillQuantity != null || fillPrice != null || ledgerTransaction != null) {
                 throw new IllegalArgumentException("fill fields are allowed only for partial and final fills");
@@ -31,16 +38,6 @@ public final class OrderLifecycleContractV1 {
             } else if (reasonCode != null) {
                 throw new IllegalArgumentException("reasonCode is allowed only for cancelled, expired, and rejected events");
             }
-        }
-
-        public Event(
-            UUID orderId,
-            EventType type,
-            DecimalValueV1 fillQuantity,
-            CurrencyAmountV1 fillPrice,
-            LedgerContractV1.Transaction ledgerTransaction
-        ) {
-            this(orderId, type, fillQuantity, fillPrice, ledgerTransaction, null);
         }
 
         private static boolean isFill(EventType type) {

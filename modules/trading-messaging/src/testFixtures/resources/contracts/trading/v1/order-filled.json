@@ -5,22 +5,25 @@
   "occurredAt": "2026-07-31T14:30:00Z",
   "producer": "trading-worker",
   "correlationId": "00000000-0000-0000-0000-000000000801",
-  "causationId": "00000000-0000-0000-0000-000000000802",
+  "causationId": "00000000-0000-0000-0000-000000000501",
   "idempotencyKey": "filled-00000000-0000-0000-0000-000000000502",
   "aggregateId": "00000000-0000-0000-0000-000000000401",
-  "aggregateVersion": 2,
+  "aggregateVersion": 3,
   "payload": {
     "orderId": "00000000-0000-0000-0000-000000000401",
+    "intentId": "00000000-0000-0000-0000-000000000311",
+    "candidateId": "00000000-0000-0000-0000-000000000211",
     "type": "FILLED",
-    "fillQuantity": { "value": "7.5" },
+    "orderQuantity": { "value": "10.5" },
+    "fillQuantity": { "value": "8" },
     "fillPrice": { "currency": "USD", "amount": { "value": "100" } },
     "ledgerTransaction": {
       "transactionId": "00000000-0000-0000-0000-000000000602",
       "sourceEventId": "00000000-0000-0000-0000-000000000502",
       "postedAt": "2026-07-31T14:30:00Z",
       "entries": [
-        { "entryId": "00000000-0000-0000-0000-000000000621", "accountCode": "SECURITY", "direction": "DEBIT", "amount": { "currency": "USD", "amount": { "value": "750" } }, "sourceEventId": "00000000-0000-0000-0000-000000000502" },
-        { "entryId": "00000000-0000-0000-0000-000000000622", "accountCode": "CASH", "direction": "CREDIT", "amount": { "currency": "USD", "amount": { "value": "750" } }, "sourceEventId": "00000000-0000-0000-0000-000000000502" }
+        { "entryId": "00000000-0000-0000-0000-000000000621", "accountCode": "SECURITY", "direction": "DEBIT", "amount": { "currency": "USD", "amount": { "value": "800" } }, "sourceEventId": "00000000-0000-0000-0000-000000000502" },
+        { "entryId": "00000000-0000-0000-0000-000000000622", "accountCode": "CASH", "direction": "CREDIT", "amount": { "currency": "USD", "amount": { "value": "800" } }, "sourceEventId": "00000000-0000-0000-0000-000000000502" }
       ]
     },
     "reasonCode": null

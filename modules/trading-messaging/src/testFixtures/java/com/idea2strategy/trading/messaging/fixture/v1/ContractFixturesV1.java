@@ -24,8 +24,11 @@ public final class ContractFixturesV1 {
     public static final UUID CANDIDATE_BATCH_ID = UUID.fromString("00000000-0000-0000-0000-000000000201");
     public static final UUID INTENT_BATCH_ID = UUID.fromString("00000000-0000-0000-0000-000000000301");
     public static final UUID ORDER_ID = UUID.fromString("00000000-0000-0000-0000-000000000401");
+    public static final UUID CANCELLED_ORDER_ID = UUID.fromString("00000000-0000-0000-0000-000000000402");
+    public static final UUID REJECTED_ORDER_ID = UUID.fromString("00000000-0000-0000-0000-000000000403");
     public static final UUID PARTIAL_FILL_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000501");
     public static final UUID LEDGER_TRANSACTION_ID = UUID.fromString("00000000-0000-0000-0000-000000000601");
+    public static final UUID LEDGER_PUBLICATION_TRANSACTION_ID = UUID.fromString("00000000-0000-0000-0000-000000000604");
     public static final UUID SETTLEMENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000701");
     public static final Instant FIXTURE_TIME = Instant.parse("2026-07-31T14:30:00Z");
     public static final String COST_POLICY_VERSION = "virtual-fill-cost-v1";
@@ -36,6 +39,7 @@ public final class ContractFixturesV1 {
     public static final UUID STALE_ACCEPTED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000412");
     public static final UUID FUTURE_GAP_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000413");
     public static final UUID FILLED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000502");
+    public static final UUID CANCELLATION_ACCEPTED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000414");
     public static final UUID CANCELLED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000503");
     public static final UUID REJECTED_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000504");
     public static final UUID SETTLEMENT_EVENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000702");
@@ -68,7 +72,7 @@ public final class ContractFixturesV1 {
             ))
             .toList();
         return envelope(
-            "order.intent-batch", INTENT_BATCH_ID, "intent-batch-" + candidates.batchId(), INTENT_BATCH_ID, 1,
+            "order.intent-batch", INTENT_BATCH_ID, "intent-batch-" + candidates.batchId(), INTENT_BATCH_ID, 1, candidates.batchId(),
             new OrderExecutionContractV1.IntentBatch(INTENT_BATCH_ID, BOT_ID, candidates.evaluationId(), intents)
         );
     }
@@ -83,60 +87,77 @@ public final class ContractFixturesV1 {
                 intent("00000000-0000-0000-0000-000000000313", "00000000-0000-0000-0000-000000000213", OrderExecutionContractV1.Side.SELL, "5", "0", OrderExecutionContractV1.IntentDecision.REJECTED, "POSITION_CONSTRAINT", OrderExecutionContractV1.QuantityMode.WHOLE_SHARES, costPolicy)
             )
         );
-        return envelope("order.intent-batch", INTENT_BATCH_ID, "intent-batch-" + INTENT_BATCH_ID, INTENT_BATCH_ID, 1, intentBatch);
+        return envelope("order.intent-batch", INTENT_BATCH_ID, "intent-batch-" + INTENT_BATCH_ID, INTENT_BATCH_ID, 1, CANDIDATE_BATCH_ID, intentBatch);
     }
 
     public static TradingEnvelopeV1<OrderLifecycleContractV1.Event> acceptedEnvelope() {
-        return envelope("order.accepted", ACCEPTED_EVENT_ID, "accepted-" + ACCEPTED_EVENT_ID, ORDER_ID, 1,
-            new OrderLifecycleContractV1.Event(ORDER_ID, OrderLifecycleContractV1.EventType.ACCEPTED, null, null, null, null));
+        return envelope("order.accepted", ACCEPTED_EVENT_ID, "accepted-" + ACCEPTED_EVENT_ID, ORDER_ID, 1, INTENT_BATCH_ID,
+            lifecycleEvent(ORDER_ID, "00000000-0000-0000-0000-000000000311", "00000000-0000-0000-0000-000000000211", "10.5",
+                OrderLifecycleContractV1.EventType.ACCEPTED, null, null, null, null));
     }
 
     public static TradingEnvelopeV1<OrderLifecycleContractV1.Event> staleAcceptedEnvelope() {
-        return envelope("order.accepted", STALE_ACCEPTED_EVENT_ID, "stale-accepted-" + STALE_ACCEPTED_EVENT_ID, ORDER_ID, 1,
+        return envelope("order.accepted", STALE_ACCEPTED_EVENT_ID, "stale-accepted-" + STALE_ACCEPTED_EVENT_ID, ORDER_ID, 1, INTENT_BATCH_ID,
             acceptedEnvelope().payload());
     }
 
     public static TradingEnvelopeV1<OrderLifecycleContractV1.Event> futureGapEnvelope() {
-        return envelope("order.accepted", FUTURE_GAP_EVENT_ID, "future-gap-" + FUTURE_GAP_EVENT_ID, ORDER_ID, 3,
+        return envelope("order.accepted", FUTURE_GAP_EVENT_ID, "future-gap-" + FUTURE_GAP_EVENT_ID, ORDER_ID, 3, INTENT_BATCH_ID,
             acceptedEnvelope().payload());
     }
 
     public static TradingEnvelopeV1<OrderLifecycleContractV1.Event> partialFillEnvelope() {
         var transaction = ledgerTransaction(LEDGER_TRANSACTION_ID, PARTIAL_FILL_EVENT_ID, "250", "SECURITY", "CASH");
         var event = new OrderLifecycleContractV1.Event(
-            ORDER_ID, OrderLifecycleContractV1.EventType.PARTIALLY_FILLED,
+            ORDER_ID, UUID.fromString("00000000-0000-0000-0000-000000000311"), UUID.fromString("00000000-0000-0000-0000-000000000211"),
+            OrderLifecycleContractV1.EventType.PARTIALLY_FILLED, new DecimalValueV1("10.5"),
             new DecimalValueV1("2.5"), new CurrencyAmountV1("USD", new DecimalValueV1("100")), transaction, null
         );
-        return envelope("order.partially-filled", PARTIAL_FILL_EVENT_ID, "partial-fill-" + PARTIAL_FILL_EVENT_ID, ORDER_ID, 1, event);
+        return envelope("order.partially-filled", PARTIAL_FILL_EVENT_ID, "partial-fill-" + PARTIAL_FILL_EVENT_ID, ORDER_ID, 2, ACCEPTED_EVENT_ID, event);
     }
 
     public static TradingEnvelopeV1<OrderLifecycleContractV1.Event> filledEnvelope() {
-        var transaction = ledgerTransaction(UUID.fromString("00000000-0000-0000-0000-000000000602"), FILLED_EVENT_ID, "750", "SECURITY", "CASH");
+        var transaction = ledgerTransaction(UUID.fromString("00000000-0000-0000-0000-000000000602"), FILLED_EVENT_ID, "800", "SECURITY", "CASH");
         var event = new OrderLifecycleContractV1.Event(
-            ORDER_ID, OrderLifecycleContractV1.EventType.FILLED,
-            new DecimalValueV1("7.5"), new CurrencyAmountV1("USD", new DecimalValueV1("100")), transaction, null
+            ORDER_ID, UUID.fromString("00000000-0000-0000-0000-000000000311"), UUID.fromString("00000000-0000-0000-0000-000000000211"),
+            OrderLifecycleContractV1.EventType.FILLED, new DecimalValueV1("10.5"),
+            new DecimalValueV1("8"), new CurrencyAmountV1("USD", new DecimalValueV1("100")), transaction, null
         );
-        return envelope("order.filled", FILLED_EVENT_ID, "filled-" + FILLED_EVENT_ID, ORDER_ID, 2, event);
+        return envelope("order.filled", FILLED_EVENT_ID, "filled-" + FILLED_EVENT_ID, ORDER_ID, 3, PARTIAL_FILL_EVENT_ID, event);
+    }
+
+    public static TradingEnvelopeV1<OrderLifecycleContractV1.Event> cancellationAcceptedEnvelope() {
+        var event = lifecycleEvent(
+            CANCELLED_ORDER_ID, "00000000-0000-0000-0000-000000000312", "00000000-0000-0000-0000-000000000212", "10",
+            OrderLifecycleContractV1.EventType.ACCEPTED, null, null, null, null
+        );
+        return envelope(
+            "order.accepted", CANCELLATION_ACCEPTED_EVENT_ID, "accepted-" + CANCELLATION_ACCEPTED_EVENT_ID,
+            CANCELLED_ORDER_ID, 1, INTENT_BATCH_ID, event
+        );
     }
 
     public static TradingEnvelopeV1<OrderLifecycleContractV1.Event> cancelledEnvelope() {
-        var event = new OrderLifecycleContractV1.Event(ORDER_ID, OrderLifecycleContractV1.EventType.CANCELLED, null, null, null, "USER_REQUESTED");
-        return envelope("order.cancelled", CANCELLED_EVENT_ID, "cancelled-" + CANCELLED_EVENT_ID, ORDER_ID, 3, event);
+        var event = lifecycleEvent(CANCELLED_ORDER_ID, "00000000-0000-0000-0000-000000000312", "00000000-0000-0000-0000-000000000212", "10",
+            OrderLifecycleContractV1.EventType.CANCELLED, null, null, null, "USER_REQUESTED");
+        return envelope("order.cancelled", CANCELLED_EVENT_ID, "cancelled-" + CANCELLED_EVENT_ID, CANCELLED_ORDER_ID, 2, CANCELLATION_ACCEPTED_EVENT_ID, event);
     }
 
     public static TradingEnvelopeV1<OrderLifecycleContractV1.Event> rejectedEnvelope() {
-        var event = new OrderLifecycleContractV1.Event(ORDER_ID, OrderLifecycleContractV1.EventType.REJECTED, null, null, null, "INSUFFICIENT_BUYING_POWER");
-        return envelope("order.rejected", REJECTED_EVENT_ID, "rejected-" + REJECTED_EVENT_ID, ORDER_ID, 1, event);
+        var event = lifecycleEvent(REJECTED_ORDER_ID, "00000000-0000-0000-0000-000000000313", "00000000-0000-0000-0000-000000000213", "5",
+            OrderLifecycleContractV1.EventType.REJECTED, null, null, null, "INSUFFICIENT_BUYING_POWER");
+        return envelope("order.rejected", REJECTED_EVENT_ID, "rejected-" + REJECTED_EVENT_ID, REJECTED_ORDER_ID, 1, INTENT_BATCH_ID, event);
     }
 
     public static TradingEnvelopeV1<SettlementContractV1.Event> settlementCompletedEnvelope() {
         var event = new SettlementContractV1.Event(SETTLEMENT_ID, BOT_ID, SettlementContractV1.EventType.COMPLETED, null, 1, List.of(ORDER_ID));
-        return envelope("settlement.completed", SETTLEMENT_EVENT_ID, "settlement-completed-" + SETTLEMENT_ID, SETTLEMENT_ID, 1, event);
+        return envelope("settlement.completed", SETTLEMENT_EVENT_ID, "settlement-completed-" + SETTLEMENT_ID, SETTLEMENT_ID, 1, FILLED_EVENT_ID, event);
     }
 
     public static TradingEnvelopeV1<LedgerContractV1.Transaction> ledgerTransactionEnvelope() {
-        return envelope("ledger.transaction", LEDGER_ENVELOPE_EVENT_ID, "ledger-transaction-" + LEDGER_TRANSACTION_ID, LEDGER_TRANSACTION_ID, 1,
-            ledgerTransaction(LEDGER_TRANSACTION_ID, PARTIAL_FILL_EVENT_ID, "250", "SECURITY", "CASH"));
+        return envelope("ledger.transaction", LEDGER_ENVELOPE_EVENT_ID, "ledger-transaction-" + LEDGER_PUBLICATION_TRANSACTION_ID,
+            LEDGER_PUBLICATION_TRANSACTION_ID, 1, PARTIAL_FILL_EVENT_ID,
+            ledgerTransaction(LEDGER_PUBLICATION_TRANSACTION_ID, LEDGER_ENVELOPE_EVENT_ID, "250", "SECURITY", "CASH"));
     }
 
     public static FixtureDeliveryProjectionV1.DeliveryScenario deliveryScenario() {
@@ -197,14 +218,40 @@ public final class ContractFixturesV1 {
         ));
     }
 
+    private static OrderLifecycleContractV1.Event lifecycleEvent(
+        UUID orderId,
+        String intentId,
+        String candidateId,
+        String orderQuantity,
+        OrderLifecycleContractV1.EventType type,
+        DecimalValueV1 fillQuantity,
+        CurrencyAmountV1 fillPrice,
+        LedgerContractV1.Transaction transaction,
+        String reasonCode
+    ) {
+        return new OrderLifecycleContractV1.Event(
+            orderId, UUID.fromString(intentId), UUID.fromString(candidateId), type, new DecimalValueV1(orderQuantity),
+            fillQuantity, fillPrice, transaction, reasonCode
+        );
+    }
+
     private static UUID entryId(UUID transactionId, int sequence) {
-        String entrySuffix = transactionId.equals(LEDGER_TRANSACTION_ID) ? "61" : "62";
+        String entrySuffix = transactionId.equals(LEDGER_TRANSACTION_ID) ? "61"
+            : transactionId.equals(LEDGER_PUBLICATION_TRANSACTION_ID) ? "64" : "62";
         return UUID.fromString("00000000-0000-0000-0000-000000000" + entrySuffix + sequence);
     }
 
-    private static <T> TradingEnvelopeV1<T> envelope(String eventType, UUID eventId, String idempotencyKey, UUID aggregateId, long aggregateVersion, T payload) {
+    private static <T> TradingEnvelopeV1<T> envelope(
+        String eventType,
+        UUID eventId,
+        String idempotencyKey,
+        UUID aggregateId,
+        long aggregateVersion,
+        UUID causationId,
+        T payload
+    ) {
         return new TradingEnvelopeV1<>(
-            "trading.v1", eventType, eventId, FIXTURE_TIME, "trading-worker", CORRELATION_ID, CAUSATION_ID,
+            "trading.v1", eventType, eventId, FIXTURE_TIME, "trading-worker", CORRELATION_ID, causationId,
             idempotencyKey, aggregateId, aggregateVersion, payload
         );
     }

@@ -28,12 +28,13 @@ public record TradingEnvelopeV1<T>(
         ContractValidationV1.required(aggregateId, "aggregateId");
         ContractValidationV1.positiveVersion(aggregateVersion, "aggregateVersion");
         ContractValidationV1.required(payload, "payload");
-        validateKnownPayload(schemaVersion, eventType, occurredAt, aggregateId, payload);
+        validateKnownPayload(schemaVersion, eventType, eventId, occurredAt, aggregateId, payload);
     }
 
     private static void validateKnownPayload(
         String schemaVersion,
         String eventType,
+        UUID eventId,
         Instant occurredAt,
         UUID aggregateId,
         Object payload
@@ -47,6 +48,40 @@ public record TradingEnvelopeV1<T>(
                     throw new IllegalArgumentException("GTD expiresAt must be after envelope occurredAt");
                 }
             }
+        } else if (payload instanceof OrderLifecycleContractV1.Event event) {
+            requireContractRoute(schemaVersion, eventType, lifecycleEventType(event.type()));
+            requireAggregate(aggregateId, event.orderId());
+            if (event.ledgerTransaction() != null) {
+                validateLedgerPublication(eventId, occurredAt, event.ledgerTransaction());
+            }
+        } else if (payload instanceof LedgerContractV1.Transaction transaction) {
+            requireContractRoute(schemaVersion, eventType, "ledger.transaction");
+            requireAggregate(aggregateId, transaction.transactionId());
+            validateLedgerPublication(eventId, occurredAt, transaction);
+        }
+    }
+
+    private static String lifecycleEventType(OrderLifecycleContractV1.EventType type) {
+        return switch (type) {
+            case ACCEPTED -> "order.accepted";
+            case PARTIALLY_FILLED -> "order.partially-filled";
+            case FILLED -> "order.filled";
+            case CANCELLED -> "order.cancelled";
+            case EXPIRED -> "order.expired";
+            case REJECTED -> "order.rejected";
+        };
+    }
+
+    private static void validateLedgerPublication(
+        UUID eventId,
+        Instant occurredAt,
+        LedgerContractV1.Transaction transaction
+    ) {
+        if (!eventId.equals(transaction.sourceEventId())) {
+            throw new IllegalArgumentException("ledger sourceEventId must match envelope eventId");
+        }
+        if (!occurredAt.equals(transaction.postedAt())) {
+            throw new IllegalArgumentException("ledger postedAt must equal envelope occurredAt");
         }
     }
 
