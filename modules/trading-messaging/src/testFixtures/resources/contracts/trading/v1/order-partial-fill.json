@@ -2,7 +2,7 @@
   "schemaVersion": "trading.v1",
   "eventType": "order.partially-filled",
   "eventId": "00000000-0000-0000-0000-000000000501",
-  "occurredAt": "2026-07-31T14:30:00Z",
+  "occurredAt": "2026-07-31T14:30:00.200Z",
   "producer": "trading-worker",
   "correlationId": "00000000-0000-0000-0000-000000000801",
   "causationId": "00000000-0000-0000-0000-000000000411",
@@ -11,19 +11,19 @@
   "aggregateVersion": 2,
   "payload": {
     "orderId": "00000000-0000-0000-0000-000000000401",
-    "intentId": "00000000-0000-0000-0000-000000000311",
-    "candidateId": "00000000-0000-0000-0000-000000000211",
+    "intentId": "27e931ce-72ee-3607-ad2d-0d10ab3b3630",
+    "candidateId": "35c2d356-b7a3-43b4-80c3-fd7cad84cdcd",
     "type": "PARTIALLY_FILLED",
-    "orderQuantity": { "value": "10.5" },
-    "fillQuantity": { "value": "2.5" },
-    "fillPrice": { "currency": "USD", "amount": { "value": "100" } },
+    "orderQuantity": { "value": "2" },
+    "fillQuantity": { "value": "1" },
+    "fillPrice": { "currency": "USD", "amount": { "value": "210.12" } },
     "ledgerTransaction": {
       "transactionId": "00000000-0000-0000-0000-000000000601",
       "sourceEventId": "00000000-0000-0000-0000-000000000501",
-      "postedAt": "2026-07-31T14:30:00Z",
+      "postedAt": "2026-07-31T14:30:00.200Z",
       "entries": [
-        { "entryId": "00000000-0000-0000-0000-000000000611", "accountCode": "SECURITY", "direction": "DEBIT", "amount": { "currency": "USD", "amount": { "value": "250" } }, "sourceEventId": "00000000-0000-0000-0000-000000000501" },
-        { "entryId": "00000000-0000-0000-0000-000000000612", "accountCode": "CASH", "direction": "CREDIT", "amount": { "currency": "USD", "amount": { "value": "250" } }, "sourceEventId": "00000000-0000-0000-0000-000000000501" }
+        { "entryId": "00000000-0000-0000-0000-000000000611", "accountCode": "SECURITY", "direction": "DEBIT", "amount": { "currency": "USD", "amount": { "value": "210.12" } }, "sourceEventId": "00000000-0000-0000-0000-000000000501" },
+        { "entryId": "00000000-0000-0000-0000-000000000612", "accountCode": "CASH", "direction": "CREDIT", "amount": { "currency": "USD", "amount": { "value": "210.12" } }, "sourceEventId": "00000000-0000-0000-0000-000000000501" }
       ]
     },
     "reasonCode": null

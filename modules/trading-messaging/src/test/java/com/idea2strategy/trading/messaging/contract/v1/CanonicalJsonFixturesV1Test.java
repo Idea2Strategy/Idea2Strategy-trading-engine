@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonMappingException;
 import com.idea2strategy.trading.messaging.fixture.v1.ContractFixturesV1;
 import com.idea2strategy.trading.messaging.fixture.v1.ContractJsonFixtureLoaderV1;
 import com.idea2strategy.trading.messaging.fixture.v1.FixtureDeliveryProjectionV1;
+import com.idea2strategy.trading.messaging.evaluation.OrderCandidateBatch;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -46,13 +47,15 @@ class CanonicalJsonFixturesV1Test {
     void canonicalEnvelopeEventIdsAreUnique() {
         var eventIds = ContractJsonFixtureLoaderV1.canonicalEnvelopeEventIds();
 
-        assertThat(eventIds).hasSize(11);
+        assertThat(eventIds).hasSize(12);
         assertThat(new HashSet<>(eventIds)).hasSameSizeAs(eventIds);
     }
 
     @Test
     void canonicalIdentityGraphLinksCandidateIntentOrderFillAndLedger() {
-        var candidates = ContractFixturesV1.candidateBatch();
+        var candidates = ContractJsonFixtureLoaderV1.readResource(
+            "contracts/v1/order-candidate-batch.json", new TypeReference<OrderCandidateBatch>() {}
+        );
         var intents = read("intent-batch.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {});
         var accepted = read("order-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {});
         var partial = read("order-partial-fill.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {});
@@ -102,6 +105,8 @@ class CanonicalJsonFixturesV1Test {
     void canonicalResourcesMatchDeterministicJavaFixtures() {
         assertThat(read("intent-batch.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {}))
             .isEqualTo(ContractFixturesV1.intentBatchEnvelope());
+        assertThat(read("intent-decision-scenarios.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {}))
+            .isEqualTo(ContractFixturesV1.intentDecisionScenarioEnvelope());
         assertThat(read("order-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}))
             .isEqualTo(ContractFixturesV1.acceptedEnvelope());
         assertThat(read("order-cancel-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}))
@@ -129,6 +134,7 @@ class CanonicalJsonFixturesV1Test {
     static Stream<Arguments> canonicalFixtures() {
         return Stream.of(
             Arguments.of("intent-batch.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {}),
+            Arguments.of("intent-decision-scenarios.json", new TypeReference<TradingEnvelopeV1<OrderExecutionContractV1.IntentBatch>>() {}),
             Arguments.of("order-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
             Arguments.of("order-cancel-accepted.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),
             Arguments.of("order-partial-fill.json", new TypeReference<TradingEnvelopeV1<OrderLifecycleContractV1.Event>>() {}),

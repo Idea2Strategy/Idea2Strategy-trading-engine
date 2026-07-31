@@ -5,7 +5,7 @@
   "occurredAt": "2026-07-31T14:30:00Z",
   "producer": "trading-worker",
   "correlationId": "00000000-0000-0000-0000-000000000801",
-  "causationId": "00000000-0000-0000-0000-000000000301",
+  "causationId": "00000000-0000-0000-0000-000000000302",
   "idempotencyKey": "rejected-00000000-0000-0000-0000-000000000504",
   "aggregateId": "00000000-0000-0000-0000-000000000403",
   "aggregateVersion": 1,

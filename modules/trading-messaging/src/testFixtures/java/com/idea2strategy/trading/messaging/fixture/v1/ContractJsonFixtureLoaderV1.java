@@ -17,6 +17,7 @@ public final class ContractJsonFixtureLoaderV1 {
     private static final String RESOURCE_DIRECTORY = "contracts/trading/v1/";
     private static final List<String> ENVELOPE_RESOURCES = List.of(
         "intent-batch.json",
+        "intent-decision-scenarios.json",
         "order-accepted.json",
         "order-cancel-accepted.json",
         "order-partial-fill.json",
