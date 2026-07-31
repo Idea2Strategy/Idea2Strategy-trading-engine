@@ -39,6 +39,13 @@ class LedgerContractV1Test {
     }
 
     @Test
+    void reportsUnbalancedTransactionAsBalancedValidationFailure() {
+        assertThatThrownBy(() -> unbalancedTransaction())
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("balanced");
+    }
+
+    @Test
     void rejectsTransactionWithDebitAndCreditInDifferentCurrencies() {
         assertThatThrownBy(() -> transaction(List.of(
             debit("USD", "100"),
@@ -58,6 +65,10 @@ class LedgerContractV1Test {
             Instant.parse("2026-07-31T00:00:00Z"),
             entries
         );
+    }
+
+    private LedgerContractV1.Transaction unbalancedTransaction() {
+        return transaction(List.of(debit("USD", "100"), credit("USD", "99")));
     }
 
     private LedgerContractV1.Entry debit(String currency, String amount) {

@@ -58,12 +58,12 @@ public final class LedgerContractV1 {
 
             for (String currency : debitTotals.keySet()) {
                 if (debitTotals.get(currency).compareTo(creditTotals.getOrDefault(currency, BigDecimal.ZERO)) != 0) {
-                    throw new IllegalArgumentException("ledger transaction must balance by currency");
+                    throw new IllegalArgumentException("ledger transaction must be balanced; balance by currency");
                 }
             }
             for (String currency : creditTotals.keySet()) {
                 if (!debitTotals.containsKey(currency)) {
-                    throw new IllegalArgumentException("ledger transaction must balance by currency");
+                    throw new IllegalArgumentException("ledger transaction must be balanced; balance by currency");
                 }
             }
         }
