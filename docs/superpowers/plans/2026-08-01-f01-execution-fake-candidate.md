@@ -21,6 +21,8 @@
 
 **Files:**
 - Create: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/order/Order.java`
+- Create: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/candidate/CandidateBatch.java`
+- Create: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/candidate/CandidateOrder.java`
 - Create: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/execution/Execution.java`
 - Create: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/settlement/Settlement.java`
 - Create: `modules/trading-application/src/main/java/com/idea2strategy/trading/application/candidate/CandidateBatchProcessor.java`
@@ -30,7 +32,7 @@
 - Modify: `modules/trading-application/build.gradle.kts`
 
 **Interfaces:**
-- Consumes: `OrderCandidateBatch` from `trading-messaging`.
+- Consumes: dependency-neutral `CandidateBatch`; the worker adapter translates COM-C `OrderCandidateBatch` messages into it.
 - Produces: `CandidateBatchClaimPort.claim(OrderCandidateBatch)`, `CandidateBatchStatusPort.complete/fail`, `OrderPort.place`, `ExecutionPort.execute`, `SettlementPort.settle`, and `CandidateBatchProcessor.process`.
 
 - [ ] Write the failing duplicate-delivery test using in-memory recording ports; assert two calls return `PROCESSED` then `DUPLICATE`, one claim record exists, and each downstream port runs once.

@@ -29,7 +29,7 @@ This shifts idempotency to delivery infrastructure and couples F01 to unfinished
 
 ## Architecture
 
-`CandidateBatchProcessor` is the application use case. It asks `CandidateBatchClaimPort` to claim the batch, returns `DUPLICATE` when the claim fails, and otherwise processes every candidate through `OrderPort`, `ExecutionPort`, and `SettlementPort`. A successful batch is marked completed; an exception is recorded as failed and rethrown so delivery infrastructure can apply its retry policy without silently hiding failure.
+`CandidateBatchProcessor` is the application use case. A worker input adapter translates the COM-C message into the dependency-neutral domain `CandidateBatch`, avoiding a cycle because `trading-messaging` already depends on `trading-application`. The processor asks `CandidateBatchClaimPort` to claim the batch, returns `DUPLICATE` when the claim fails, and otherwise processes every candidate through `OrderPort`, `ExecutionPort`, and `SettlementPort`. A successful batch is marked completed; an exception is recorded as failed and rethrown so delivery infrastructure can apply its retry policy without silently hiding failure.
 
 The domain module owns small order, execution, and settlement value objects and their statuses. The application module owns orchestration and port interfaces. The persistence module owns the JPA processing entity, the atomic JDBC claim adapter, and a jOOQ query adapter. The trading-worker app wires fake downstream adapters and an optional fake source so the application can start and demonstrate the flow independently.
 
