@@ -23,6 +23,7 @@ public final class BasicBudgetAllocator {
                 .map(strategy -> planFor(strategy, request.totalEquity()))
                 .toList();
         BigDecimal totalCapLimited = strategyPlans.stream()
+                .filter(StrategyPlan::isAllocatable)
                 .map(StrategyPlan::capLimitedTotal)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal sharedFactor = totalCapLimited.signum() == 0 || totalCapLimited.compareTo(spendableCash) <= 0
@@ -142,5 +143,11 @@ public final class BasicBudgetAllocator {
             BigDecimal approvedStrategyEnvelope,
             BudgetDecisionStatus status,
             List<BudgetReasonCode> reasonCodes) {
+
+        private boolean isAllocatable() {
+            return !candidateIds.isEmpty()
+                    && capLimitedTotal.signum() > 0
+                    && status != BudgetDecisionStatus.REJECTED;
+        }
     }
 }
