@@ -5,6 +5,8 @@ create table trading.candidate_batch_processing (
     evaluation_id uuid not null,
     source_created_at timestamptz not null,
     status varchar(16) not null,
+    claim_token uuid not null,
+    lease_expires_at timestamptz not null,
     failure_reason varchar(512),
     started_at timestamptz not null default current_timestamp,
     updated_at timestamptz not null default current_timestamp,

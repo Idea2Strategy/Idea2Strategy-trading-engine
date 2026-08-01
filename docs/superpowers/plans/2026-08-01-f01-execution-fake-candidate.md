@@ -57,13 +57,13 @@
 
 **Interfaces:**
 - Consumes: application claim/status ports and `OrderCandidateBatch`.
-- Produces: atomic `claim`, JPA `complete/fail`, and jOOQ `findByBatchId`/`count` operations.
+- Produces: atomic tokenized `claim`/`renew`, token-fenced JPA `complete/fail`, and jOOQ `findByBatchId`/`count` operations.
 
 - [ ] Write a Testcontainers test that migrates PostgreSQL, claims the same batch twice, and expects `true`, `false`, and a jOOQ count of one.
 - [ ] Run the focused persistence test and confirm it fails before adapters and migration exist.
 - [ ] Add dependencies, the Flyway migration, JPA entity/repository, atomic JDBC claim adapter, and jOOQ query adapter.
 - [ ] Run the focused persistence test and confirm it passes.
-- [ ] Add concurrent, failed-reclaim, and abandoned-processing tests; assert one active claimant and one durable row.
+- [ ] Add concurrent, failed-reclaim, abandoned-processing, heartbeat, and old-claimant fencing tests; assert one active token and one durable row.
 - [ ] Run all persistence tests and commit as `feat: persist candidate batch claims atomically`.
 
 ### Task 3: Fake source, worker wiring, and independent startup

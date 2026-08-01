@@ -26,6 +26,12 @@ public class CandidateBatchProcessingEntity {
     @Column(name = "status", nullable = false, length = 16)
     private CandidateBatchProcessingStatus status;
 
+    @Column(name = "claim_token", nullable = false)
+    private UUID claimToken;
+
+    @Column(name = "lease_expires_at", nullable = false)
+    private Instant leaseExpiresAt;
+
     @Column(name = "failure_reason", length = 512)
     private String failureReason;
 
@@ -50,15 +56,4 @@ public class CandidateBatchProcessingEntity {
         return failureReason;
     }
 
-    public void complete(Instant completedAt) {
-        status = CandidateBatchProcessingStatus.COMPLETED;
-        failureReason = null;
-        updatedAt = completedAt;
-    }
-
-    public void fail(String reason, Instant failedAt) {
-        status = CandidateBatchProcessingStatus.FAILED;
-        failureReason = reason;
-        updatedAt = failedAt;
-    }
 }

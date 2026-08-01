@@ -1,37 +1,35 @@
 package com.idea2strategy.trading.persistence.candidate;
 
+import com.idea2strategy.trading.application.candidate.CandidateBatchClaim;
+import com.idea2strategy.trading.application.candidate.CandidateBatchClaimLostException;
 import com.idea2strategy.trading.application.port.CandidateBatchStatusPort;
-import java.time.Clock;
-import java.time.Instant;
 import java.util.Objects;
-import java.util.UUID;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-@Repository
+@Component
 public class JpaCandidateBatchStatusAdapter implements CandidateBatchStatusPort {
     private final CandidateBatchProcessingRepository repository;
-    private final Clock clock;
 
     public JpaCandidateBatchStatusAdapter(CandidateBatchProcessingRepository repository) {
         this.repository = Objects.requireNonNull(repository, "repository");
-        this.clock = Clock.systemUTC();
     }
 
     @Override
     @Transactional
-    public void complete(UUID batchId) {
-        processing(batchId).complete(Instant.now(clock));
+    public void complete(CandidateBatchClaim claim) {
+        requireActive(repository.complete(claim.batchId(), claim.token()), claim);
     }
 
     @Override
     @Transactional
-    public void fail(UUID batchId, String reason) {
-        processing(batchId).fail(reason, Instant.now(clock));
+    public void fail(CandidateBatchClaim claim, String reason) {
+        requireActive(repository.fail(claim.batchId(), claim.token(), reason), claim);
     }
 
-    private CandidateBatchProcessingEntity processing(UUID batchId) {
-        return repository.findById(batchId)
-                .orElseThrow(() -> new IllegalStateException("Candidate batch was not claimed: " + batchId));
+    private static void requireActive(int updatedRows, CandidateBatchClaim claim) {
+        if (updatedRows != 1) {
+            throw new CandidateBatchClaimLostException(claim);
+        }
     }
 }

@@ -34,25 +34,34 @@ public final class CandidateBatchProcessor {
 
     public CandidateBatchProcessingResult process(CandidateBatch batch) {
         Objects.requireNonNull(batch, "batch");
-        if (!claimPort.claim(batch)) {
+        CandidateBatchClaim claim = claimPort.claim(batch).orElse(null);
+        if (claim == null) {
             return CandidateBatchProcessingResult.DUPLICATE;
         }
 
         try {
             batch.candidates().forEach(candidate -> {
+                renewOrThrow(claim);
                 Order order = orderPort.place(candidate);
                 Execution execution = executionPort.execute(order);
                 settlementPort.settle(execution);
             });
-            statusPort.complete(batch.batchId());
+            renewOrThrow(claim);
+            statusPort.complete(claim);
             return CandidateBatchProcessingResult.PROCESSED;
         } catch (RuntimeException failure) {
             try {
-                statusPort.fail(batch.batchId(), boundedReason(failure));
+                statusPort.fail(claim, boundedReason(failure));
             } catch (RuntimeException recordingFailure) {
                 failure.addSuppressed(recordingFailure);
             }
             throw failure;
+        }
+    }
+
+    private void renewOrThrow(CandidateBatchClaim claim) {
+        if (!claimPort.renew(claim)) {
+            throw new CandidateBatchClaimLostException(claim);
         }
     }
 

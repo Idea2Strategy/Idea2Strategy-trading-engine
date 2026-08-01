@@ -19,6 +19,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -113,6 +116,7 @@ class CandidateBatchProcessorTest {
             implements CandidateBatchClaimPort, CandidateBatchStatusPort, OrderPort, ExecutionPort, SettlementPort {
         private final Set<UUID> claimedBatchIds = new HashSet<>();
         private final Set<UUID> failedBatchIds = new HashSet<>();
+        private final Map<UUID, CandidateBatchClaim> activeClaims = new HashMap<>();
         private final List<UUID> completedBatchIds = new ArrayList<>();
         private final List<Failure> failures = new ArrayList<>();
         private final List<Order> orders = new ArrayList<>();
@@ -126,19 +130,32 @@ class CandidateBatchProcessorTest {
         }
 
         @Override
-        public boolean claim(CandidateBatch batch) {
-            return claimedBatchIds.add(batch.batchId()) || failedBatchIds.remove(batch.batchId());
+        public Optional<CandidateBatchClaim> claim(CandidateBatch batch) {
+            boolean acquired = claimedBatchIds.add(batch.batchId()) || failedBatchIds.remove(batch.batchId());
+            if (!acquired) {
+                return Optional.empty();
+            }
+            CandidateBatchClaim claim = new CandidateBatchClaim(batch.batchId(), UUID.randomUUID());
+            activeClaims.put(batch.batchId(), claim);
+            return Optional.of(claim);
         }
 
         @Override
-        public void complete(UUID batchId) {
-            completedBatchIds.add(batchId);
+        public boolean renew(CandidateBatchClaim claim) {
+            return claim.equals(activeClaims.get(claim.batchId()));
         }
 
         @Override
-        public void fail(UUID batchId, String reason) {
-            failures.add(new Failure(batchId, reason));
-            failedBatchIds.add(batchId);
+        public void complete(CandidateBatchClaim claim) {
+            completedBatchIds.add(claim.batchId());
+            activeClaims.remove(claim.batchId());
+        }
+
+        @Override
+        public void fail(CandidateBatchClaim claim, String reason) {
+            failures.add(new Failure(claim.batchId(), reason));
+            failedBatchIds.add(claim.batchId());
+            activeClaims.remove(claim.batchId());
             if (failureRecordingFailure != null) {
                 throw failureRecordingFailure;
             }
