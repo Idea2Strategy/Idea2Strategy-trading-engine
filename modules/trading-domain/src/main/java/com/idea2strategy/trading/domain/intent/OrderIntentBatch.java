@@ -16,7 +16,7 @@ public record OrderIntentBatch(
     private static final Pattern REQUEST_FINGERPRINT = Pattern.compile("[0-9a-f]{64}");
 
     public OrderIntentBatch {
-        OrderIntentIdentityHashing.requireNonNull(batchId, "batchId");
+        OrderIntentIdentityHashing.requireVersion5Rfc4122(batchId, "batchId");
         OrderIntentIdentityHashing.requireNonNull(botId, "botId");
         OrderIntentIdentityHashing.requireNonNull(evaluationId, "evaluationId");
         OrderIntentIdentityHashing.requireNonNull(sourceCandidateBatchId, "sourceCandidateBatchId");

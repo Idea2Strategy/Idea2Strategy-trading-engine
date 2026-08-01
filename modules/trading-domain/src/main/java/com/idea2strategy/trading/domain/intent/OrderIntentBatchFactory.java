@@ -1,6 +1,5 @@
 package com.idea2strategy.trading.domain.intent;
 
-import java.util.List;
 import java.util.UUID;
 
 public final class OrderIntentBatchFactory {
@@ -10,16 +9,13 @@ public final class OrderIntentBatchFactory {
         UUID batchId = OrderIntentIdentityHashing.version5(
                 OrderIntentIdentityHashing.BATCH_NAMESPACE,
                 "order-intent-batch:v1",
-                request.botId(),
-                request.evaluationId(),
-                request.sourceCandidateBatchId(),
-                request.candidateIds());
-        List<OrderIntentIdentity> intents = request.candidateIds().stream()
+                request.evaluationId());
+        var intents = request.candidateIds().stream()
                 .map(candidateId -> new OrderIntentIdentity(
                         OrderIntentIdentityHashing.version5(
                                 OrderIntentIdentityHashing.INTENT_NAMESPACE,
                                 "order-intent:v1",
-                                batchId,
+                                request.evaluationId(),
                                 candidateId),
                         candidateId))
                 .toList();

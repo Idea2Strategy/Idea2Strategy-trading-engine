@@ -5,7 +5,7 @@ import java.util.UUID;
 public record OrderIntentIdentity(UUID intentId, UUID candidateId) {
 
     public OrderIntentIdentity {
-        OrderIntentIdentityHashing.requireNonNull(intentId, "intentId");
+        OrderIntentIdentityHashing.requireVersion5Rfc4122(intentId, "intentId");
         OrderIntentIdentityHashing.requireNonNull(candidateId, "candidateId");
     }
 }

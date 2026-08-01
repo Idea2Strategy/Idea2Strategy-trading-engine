@@ -16,23 +16,13 @@ final class OrderIntentIdentityHashing {
     private OrderIntentIdentityHashing() {
     }
 
-    static UUID version5(UUID namespace, String domainTag, UUID first, UUID second, UUID third, List<UUID> candidates) {
+    static UUID version5(UUID namespace, String domainTag, UUID... identifiers) {
         MessageDigest digest = digest("SHA-1");
         digest.update(uuidBytes(namespace));
         digest.update(domainTag.getBytes(StandardCharsets.UTF_8));
-        digest.update(uuidBytes(first));
-        digest.update(uuidBytes(second));
-        digest.update(uuidBytes(third));
-        candidates.forEach(candidate -> digest.update(uuidBytes(candidate)));
-        return uuidWithVersion5(digest.digest());
-    }
-
-    static UUID version5(UUID namespace, String domainTag, UUID first, UUID second) {
-        MessageDigest digest = digest("SHA-1");
-        digest.update(uuidBytes(namespace));
-        digest.update(domainTag.getBytes(StandardCharsets.UTF_8));
-        digest.update(uuidBytes(first));
-        digest.update(uuidBytes(second));
+        for (UUID identifier : identifiers) {
+            digest.update(uuidBytes(identifier));
+        }
         return uuidWithVersion5(digest.digest());
     }
 
@@ -50,6 +40,14 @@ final class OrderIntentIdentityHashing {
     static <T> T requireNonNull(T value, String name) {
         if (value == null) {
             throw new IllegalArgumentException(name + " must not be null");
+        }
+        return value;
+    }
+
+    static UUID requireVersion5Rfc4122(UUID value, String name) {
+        requireNonNull(value, name);
+        if (value.version() != 5 || value.variant() != 2) {
+            throw new IllegalArgumentException(name + " must be an RFC 4122 version 5 UUID");
         }
         return value;
     }
