@@ -25,6 +25,9 @@ public record BasicBudgetDecision(
         requireNonNegative(expectedSlippage, "expectedSlippage");
         requireNonNegative(expectedFee, "expectedFee");
         requireNonNegative(totalRequiredCash, "totalRequiredCash");
+        if (totalRequiredCash.compareTo(approvedPrincipal.add(expectedSlippage).add(expectedFee)) != 0) {
+            throw new IllegalArgumentException("totalRequiredCash must equal approvedPrincipal plus expected costs");
+        }
         Objects.requireNonNull(status, "status");
         reasonCodes = List.copyOf(Objects.requireNonNull(reasonCodes, "reasonCodes"));
         Objects.requireNonNull(costPolicyVersion, "costPolicyVersion");

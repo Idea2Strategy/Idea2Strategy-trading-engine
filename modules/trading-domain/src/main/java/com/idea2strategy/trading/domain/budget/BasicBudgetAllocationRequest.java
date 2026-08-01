@@ -2,7 +2,6 @@ package com.idea2strategy.trading.domain.budget;
 
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Objects;
 
 public record BasicBudgetAllocationRequest(
         BigDecimal totalEquity,
@@ -15,8 +14,11 @@ public record BasicBudgetAllocationRequest(
         requireNonNegative(totalEquity, "totalEquity");
         requireNonNegative(grossAvailableCash, "grossAvailableCash");
         requireNonNegative(sharedReservedCash, "sharedReservedCash");
-        Objects.requireNonNull(costPolicy, "costPolicy");
-        strategies = List.copyOf(Objects.requireNonNull(strategies, "strategies"));
+        BudgetInputValidation.requireNonNull(costPolicy, "costPolicy");
+        strategies = BudgetInputValidation.immutableList(strategies, "strategies");
+        if (strategies.isEmpty()) {
+            throw new IllegalArgumentException("strategies must not be empty");
+        }
         if (strategies.size() != strategies.stream().map(BasicStrategyBudgetRequest::strategyId)
                 .collect(java.util.stream.Collectors.toSet()).size()) {
             throw new IllegalArgumentException("strategies must not contain duplicate strategy IDs");
@@ -24,7 +26,7 @@ public record BasicBudgetAllocationRequest(
     }
 
     private static void requireNonNegative(BigDecimal value, String name) {
-        Objects.requireNonNull(value, name);
+        BudgetInputValidation.requireNonNull(value, name);
         if (value.signum() < 0) {
             throw new IllegalArgumentException(name + " must not be negative");
         }

@@ -47,10 +47,18 @@ class BasicBudgetAllocatorTest {
         assertTrue(result.decisions().stream()
                 .allMatch(decision -> decision.costPolicyVersion().equals("virtual-fill-cost-v1")));
 
-        BigDecimal expectedPrincipal = new BigDecimal("1750")
-                .divide(new BigDecimal("1.0005").multiply(new BigDecimal("1.002")), 18, RoundingMode.DOWN);
-        assertEquals(expectedPrincipal, result.decisions().get(0).approvedPrincipal());
-        assertEquals(expectedPrincipal, result.decisions().get(1).approvedPrincipal());
+        for (BasicBudgetDecision decision : result.decisions()) {
+            assertEquals(0, decision.requestedCash().compareTo(new BigDecimal("2500.000000000000000000")));
+            assertEquals(0, decision.approvedPrincipal().compareTo(new BigDecimal("1745.634168943472375588")));
+            assertEquals(0, decision.expectedSlippage().compareTo(new BigDecimal("0.8728170844717361877940")));
+            assertEquals(0, decision.expectedFee().compareTo(new BigDecimal("3.4930139720558882235515880")));
+            assertTrue(decision.expectedFee()
+                    .compareTo(decision.approvedPrincipal().multiply(new BigDecimal("0.002"))) > 0);
+            assertEquals(0, decision.totalRequiredCash()
+                    .compareTo(new BigDecimal("1749.9999999999999999993455880")));
+            assertEquals(0, decision.totalRequiredCash().compareTo(
+                    decision.approvedPrincipal().add(decision.expectedSlippage()).add(decision.expectedFee())));
+        }
     }
 
     @Test
@@ -172,6 +180,42 @@ class BasicBudgetAllocatorTest {
                 .allMatch(decision -> decision.status() == BudgetDecisionStatus.REDUCED));
         assertTrue(result.decisions().stream().allMatch(decision -> decision.reasonCodes()
                 .contains(BudgetReasonCode.COMMON_FUNDS_PROPORTIONAL_REDUCTION)));
+    }
+
+    @Test
+    void combinesStrategyCapAndSharedFundsReductionWithoutLosingEitherReason() {
+        BasicBudgetAllocationResult result = new BasicBudgetAllocator().allocate(new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), new BigDecimal("2000"), BigDecimal.ZERO, zeroCostPolicy(),
+                List.of(
+                        strategy(
+                                "20000000-0000-0000-0000-000000000002",
+                                new BigDecimal("0.50"),
+                                new BigDecimal("1000"),
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("5000")),
+                                "30000000-0000-0000-0000-000000000003"),
+                        strategy(
+                                "40000000-0000-0000-0000-000000000004",
+                                BigDecimal.ONE,
+                                BigDecimal.ZERO,
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("1000")),
+                                "50000000-0000-0000-0000-000000000005"))));
+
+        BasicBudgetDecision capAndSharedDecision = result.decisions().get(0);
+        BasicBudgetDecision sharedOnlyDecision = result.decisions().get(1);
+        assertEquals(0, capAndSharedDecision.requestedCash().compareTo(new BigDecimal("5000.000000000000000000")));
+        assertEquals(0, capAndSharedDecision.totalRequiredCash().compareTo(new BigDecimal("1600.000000000000000000")));
+        assertEquals(BudgetDecisionStatus.REDUCED, capAndSharedDecision.status());
+        assertTrue(capAndSharedDecision.reasonCodes().contains(BudgetReasonCode.STRATEGY_BUDGET_CAP));
+        assertTrue(capAndSharedDecision.reasonCodes()
+                .contains(BudgetReasonCode.COMMON_FUNDS_PROPORTIONAL_REDUCTION));
+        assertEquals(0, sharedOnlyDecision.totalRequiredCash().compareTo(new BigDecimal("400.000000000000000000")));
+        assertEquals(BudgetDecisionStatus.REDUCED, sharedOnlyDecision.status());
+        assertTrue(sharedOnlyDecision.reasonCodes()
+                .contains(BudgetReasonCode.COMMON_FUNDS_PROPORTIONAL_REDUCTION));
     }
 
     @Test
