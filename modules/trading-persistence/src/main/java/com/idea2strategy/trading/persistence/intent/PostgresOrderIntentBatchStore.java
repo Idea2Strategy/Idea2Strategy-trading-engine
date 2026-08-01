@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -31,11 +30,7 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
     @Override
     public OrderIntentBatch createOrLoad(OrderIntentBatch desired) {
         Objects.requireNonNull(desired, "desired");
-        try {
-            return transactionTemplate.execute(status -> createOrLoadInTransaction(desired));
-        } catch (DataAccessException databaseFailure) {
-            throw conflict(databaseFailure);
-        }
+        return transactionTemplate.execute(status -> createOrLoadInTransaction(desired));
     }
 
     private OrderIntentBatch createOrLoadInTransaction(OrderIntentBatch desired) {

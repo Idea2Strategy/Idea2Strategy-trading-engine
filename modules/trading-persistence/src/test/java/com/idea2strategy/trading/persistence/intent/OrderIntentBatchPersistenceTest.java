@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
@@ -192,6 +193,23 @@ class OrderIntentBatchPersistenceTest {
         assertEquals(1, query.countBatches());
         assertEquals(2, query.countMappings());
         assertEquals(desired, query.findByEvaluationId(EVALUATION_ID).orElseThrow().toDomain());
+    }
+
+    @Test
+    void unexpectedSchemaFailureRemainsDataAccessException() {
+        OrderIntentBatch desired = desiredBatch(List.of());
+        TransactionTemplate ddlTransaction = new TransactionTemplate(transactionManager);
+
+        assertThrows(DataAccessException.class, () -> ddlTransaction.executeWithoutResult(status -> {
+            jdbcClient.sql("""
+                            alter table trading.order_intent_batch
+                            rename to order_intent_batch_unavailable
+                            """)
+                    .update();
+            store.createOrLoad(desired);
+        }));
+
+        assertEquals(0, query.countBatches());
     }
 
     @Test
