@@ -10,7 +10,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 public final class AlpacaMarketEventNormalizer {
     private static final int SCHEMA_VERSION = 1;
@@ -54,9 +53,6 @@ public final class AlpacaMarketEventNormalizer {
     }
 
     private static String eventId(AlpacaMarketInput input, UUID instrumentId, String feed, int revision) {
-        var values = new TreeMap<>(input.values()).entrySet().stream()
-                .map(entry -> entry.getKey() + "=" + entry.getValue().stripTrailingZeros().toPlainString())
-                .collect(Collectors.joining("&"));
         var canonical = String.join(
                 "\n",
                 PROVIDER,
@@ -66,8 +62,7 @@ public final class AlpacaMarketEventNormalizer {
                 input.providerEventId(),
                 input.occurredAt().toString(),
                 Long.toString(input.sequence()),
-                Integer.toString(revision),
-                values);
+                Integer.toString(revision));
         try {
             var digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
             return "evt_" + HexFormat.of().formatHex(digest);
