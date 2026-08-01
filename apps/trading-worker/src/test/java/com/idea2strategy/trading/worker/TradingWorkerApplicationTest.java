@@ -1,16 +1,20 @@
 package com.idea2strategy.trading.worker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.idea2strategy.trading.application.candidate.CandidateBatchClaimLostException;
 import com.idea2strategy.trading.application.port.CandidateBatchStatusPort;
 import com.idea2strategy.trading.domain.candidate.CandidateBatch;
+import com.idea2strategy.trading.domain.intent.OrderIntentBatch;
+import com.idea2strategy.trading.domain.intent.OrderIntentBatchFactory;
+import com.idea2strategy.trading.domain.intent.OrderIntentBatchRequest;
 import com.idea2strategy.trading.persistence.candidate.CandidateBatchProcessingStatus;
 import com.idea2strategy.trading.persistence.candidate.JooqCandidateBatchQuery;
 import com.idea2strategy.trading.persistence.candidate.PostgresCandidateBatchClaimAdapter;
+import com.idea2strategy.trading.persistence.intent.PostgresOrderIntentBatchStore;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -18,8 +22,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -51,6 +58,12 @@ class TradingWorkerApplicationTest {
 
     @Autowired
     private JdbcClient jdbcClient;
+
+    @Autowired
+    private PostgresOrderIntentBatchStore orderIntentBatchStore;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @Test
     void startsIndependentlyAndConsumesFakeCandidateBatch() {
@@ -98,5 +111,24 @@ class TradingWorkerApplicationTest {
         assertThrows(CandidateBatchClaimLostException.class, () -> statusPort.complete(previous));
         statusPort.complete(current);
         assertEquals(CandidateBatchProcessingStatus.COMPLETED, query.findByBatchId(batchId).orElseThrow().status());
+    }
+
+    @Test
+    void exactIntentRetryUsesAutoConfiguredJpaTransactionManagerInsideOuterTransaction() {
+        assertInstanceOf(JpaTransactionManager.class, transactionManager);
+        OrderIntentBatch desired = new OrderIntentBatchFactory().create(new OrderIntentBatchRequest(
+                UUID.fromString("a1000000-0000-0000-0000-000000000001"),
+                UUID.fromString("a2000000-0000-0000-0000-000000000002"),
+                UUID.fromString("a3000000-0000-0000-0000-000000000003"),
+                List.of(UUID.fromString("a4000000-0000-0000-0000-000000000004"))));
+        TransactionTemplate outerTransaction = new TransactionTemplate(transactionManager);
+
+        Integer subsequentQueryResult = outerTransaction.execute(status -> {
+            assertEquals(desired, orderIntentBatchStore.createOrLoad(desired));
+            assertEquals(desired, orderIntentBatchStore.createOrLoad(desired));
+            return jdbcClient.sql("select 1").query(Integer.class).single();
+        });
+
+        assertEquals(1, subsequentQueryResult);
     }
 }
