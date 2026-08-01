@@ -7,11 +7,10 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Repository
@@ -19,42 +18,24 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
     private static final String CONFLICT_MESSAGE = "Order intent batch identity conflict";
 
     private final JdbcClient jdbcClient;
-    private final TransactionTemplate writeTransactionTemplate;
-    private final TransactionTemplate recoveryTransactionTemplate;
+    private final TransactionTemplate transactionTemplate;
 
     public PostgresOrderIntentBatchStore(
             JdbcClient jdbcClient,
             PlatformTransactionManager transactionManager) {
         this.jdbcClient = Objects.requireNonNull(jdbcClient, "jdbcClient");
-        PlatformTransactionManager nonNullTransactionManager =
-                Objects.requireNonNull(transactionManager, "transactionManager");
-        this.writeTransactionTemplate = new TransactionTemplate(nonNullTransactionManager);
-        this.writeTransactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
-        this.recoveryTransactionTemplate = new TransactionTemplate(nonNullTransactionManager);
+        this.transactionTemplate = new TransactionTemplate(
+                Objects.requireNonNull(transactionManager, "transactionManager"));
     }
 
     @Override
     public OrderIntentBatch createOrLoad(OrderIntentBatch desired) {
         Objects.requireNonNull(desired, "desired");
         try {
-            return writeTransactionTemplate.execute(status -> createOrLoadInTransaction(desired));
-        } catch (DataIntegrityViolationException constraintFailure) {
-            // TransactionTemplate rolls back before rethrowing; the recovery load must use a healthy transaction.
-            return loadAfterRolledBackConstraintFailure(desired, constraintFailure);
+            return transactionTemplate.execute(status -> createOrLoadInTransaction(desired));
+        } catch (DataAccessException databaseFailure) {
+            throw conflict(databaseFailure);
         }
-    }
-
-    private OrderIntentBatch loadAfterRolledBackConstraintFailure(
-            OrderIntentBatch desired,
-            DataIntegrityViolationException cause) {
-        return recoveryTransactionTemplate.execute(status -> {
-            OrderIntentBatch stored = loadByEvaluationId(desired.evaluationId())
-                    .orElseThrow(() -> conflict(cause));
-            if (!stored.equals(desired)) {
-                throw conflict(cause);
-            }
-            return stored;
-        });
     }
 
     private OrderIntentBatch createOrLoadInTransaction(OrderIntentBatch desired) {
@@ -72,7 +53,7 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
                             :sourceCandidateBatchId,
                             :requestFingerprint
                         )
-                        on conflict (evaluation_id) do nothing
+                        on conflict do nothing
                         """)
                 .param("batchId", desired.batchId())
                 .param("evaluationId", desired.evaluationId())
@@ -96,7 +77,7 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
     private void insertMappings(OrderIntentBatch desired) {
         for (int ordinal = 0; ordinal < desired.intents().size(); ordinal++) {
             var identity = desired.intents().get(ordinal);
-            jdbcClient.sql("""
+            int inserted = jdbcClient.sql("""
                             insert into trading.order_intent_identity (
                                 intent_id,
                                 batch_id,
@@ -108,12 +89,16 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
                                 :candidateId,
                                 :ordinal
                             )
+                            on conflict do nothing
                             """)
                     .param("intentId", identity.intentId())
                     .param("batchId", desired.batchId())
                     .param("candidateId", identity.candidateId())
                     .param("ordinal", ordinal)
                     .update();
+            if (inserted != 1) {
+                throw conflict();
+            }
         }
     }
 

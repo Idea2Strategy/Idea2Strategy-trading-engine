@@ -20,7 +20,6 @@ import java.util.stream.Stream;
 import org.flywaydb.core.Flyway;
 import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,14 +72,6 @@ class OrderIntentBatchPersistenceTest {
         jdbcClient.sql("truncate table trading.order_intent_batch cascade").update();
     }
 
-    @AfterEach
-    void removePrimaryKeyConflictTrigger() {
-        jdbcClient.sql("drop trigger if exists force_order_intent_batch_pk_conflict on trading.order_intent_batch")
-                .update();
-        jdbcClient.sql("drop function if exists trading.force_order_intent_batch_pk_conflict()")
-                .update();
-    }
-
     @Test
     void concurrentIdenticalRequestsConvergeOnOneCompleteBatch() throws Exception {
         OrderIntentBatch desired = desiredBatch(List.of(CANDIDATE_ONE, CANDIDATE_TWO));
@@ -120,28 +111,9 @@ class OrderIntentBatchPersistenceTest {
     }
 
     @Test
-    void ambientTransactionRemainsUsableAfterPrimaryKeyConflictRecovery() {
+    void ambientRequiredTransactionRemainsUsableAfterDeterministicPrimaryKeyRetry() {
         OrderIntentBatch desired = desiredBatch(List.of());
         store.createOrLoad(desired);
-        jdbcClient.sql("""
-                        create function trading.force_order_intent_batch_pk_conflict()
-                        returns trigger
-                        language plpgsql
-                        as $trigger$
-                        begin
-                            new.evaluation_id := '20000000-0000-0000-0000-000000000012';
-                            new.source_candidate_batch_id := '30000000-0000-0000-0000-000000000013';
-                            return new;
-                        end
-                        $trigger$
-                        """)
-                .update();
-        jdbcClient.sql("""
-                        create trigger force_order_intent_batch_pk_conflict
-                        before insert on trading.order_intent_batch
-                        for each row execute function trading.force_order_intent_batch_pk_conflict()
-                        """)
-                .update();
         TransactionTemplate outerTransaction = new TransactionTemplate(transactionManager);
 
         Integer subsequentQueryResult = outerTransaction.execute(status -> {
