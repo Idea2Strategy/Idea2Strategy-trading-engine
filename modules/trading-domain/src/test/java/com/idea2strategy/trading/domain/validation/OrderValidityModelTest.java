@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -68,6 +69,23 @@ class OrderValidityModelTest {
                 () -> assertThrows(IllegalArgumentException.class, () -> new OrderValidityRequest(
                         proposalId(), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "funds-v1", validFunds(),
                         RiskDirection.INCREASING, true, null, validPolicy())));
+    }
+
+    @Test
+    void rejectsRequestDecimalsWhoseExactOperationsExceedBigDecimalScaleRange() {
+        BigDecimal multiplicationScaleOverflow = new BigDecimal(BigInteger.ONE, Integer.MAX_VALUE);
+        BigDecimal multiplicationScaleUnderflow = new BigDecimal(BigInteger.ONE, Integer.MIN_VALUE);
+        BigDecimal normalizedScaleOverflow = new BigDecimal(BigInteger.TEN, Integer.MIN_VALUE);
+
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> request(multiplicationScaleOverflow, new BigDecimal("0.1"))),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> request(multiplicationScaleUnderflow, new BigDecimal(BigInteger.ONE, -1))),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> request(normalizedScaleOverflow, BigDecimal.ONE)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> request(BigDecimal.ONE, normalizedScaleOverflow)));
     }
 
     @Test
@@ -138,6 +156,22 @@ class OrderValidityModelTest {
     }
 
     @Test
+    void enforcesExactResultStatusPrecedenceForReasons() {
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class, () -> result(
+                        OrderValidityStatus.REEVALUATION_REQUIRED,
+                        List.of(OrderValidityReason.RISK_LIMIT_EXCEEDED), List.of())),
+                () -> assertThrows(IllegalArgumentException.class, () -> result(
+                        OrderValidityStatus.REJECTED,
+                        List.of(OrderValidityReason.AVAILABLE_FUNDS_UNAVAILABLE), List.of())),
+                () -> assertThrows(IllegalArgumentException.class, () -> result(
+                        OrderValidityStatus.REEVALUATION_REQUIRED,
+                        List.of(OrderValidityReason.AVAILABLE_FUNDS_UNAVAILABLE,
+                                OrderValidityReason.RISK_LIMIT_EXCEEDED),
+                        List.of())));
+    }
+
+    @Test
     void rejectsBlankResultFundsSnapshotVersion() {
         assertThrows(IllegalArgumentException.class, () -> new OrderValidityResult(
                 proposalId(), OrderValidityStatus.ACCEPTED, List.of(), " ", "instrument-v1", List.of()));
@@ -153,6 +187,18 @@ class OrderValidityModelTest {
                 () -> assertThrows(IllegalArgumentException.class, () -> new OrderValidityResult(
                         proposalId(), OrderValidityStatus.REJECTED,
                         List.of(OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE), "funds-v1", " ", List.of())));
+    }
+
+    @Test
+    void enforcesInstrumentPolicyAvailabilityMetadata() {
+        assertAll(
+                () -> assertThrows(IllegalArgumentException.class, () -> new OrderValidityResult(
+                        proposalId(), OrderValidityStatus.REJECTED,
+                        List.of(OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE),
+                        "funds-v1", "instrument-v1", List.of())),
+                () -> assertThrows(IllegalArgumentException.class, () -> new OrderValidityResult(
+                        proposalId(), OrderValidityStatus.ACCEPTED, List.of(),
+                        "funds-v1", null, List.of())));
     }
 
     @Test
@@ -197,6 +243,12 @@ class OrderValidityModelTest {
                 proposalId(), new BigDecimal("10"), new BigDecimal("25.50"), new BigDecimal("255.00"),
                 "funds-v1", latestFundsSnapshot, riskDirection, riskEvaluationComplete, riskEvaluations,
                 instrumentPolicy);
+    }
+
+    private static OrderValidityRequest request(BigDecimal quantity, BigDecimal price) {
+        return new OrderValidityRequest(
+                proposalId(), quantity, price, BigDecimal.ONE, "funds-v1", validFunds(),
+                RiskDirection.INCREASING, true, List.of(), validPolicy());
     }
 
     private static OrderValidityResult result(

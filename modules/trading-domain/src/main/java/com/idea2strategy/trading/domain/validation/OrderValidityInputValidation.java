@@ -33,6 +33,31 @@ final class OrderValidityInputValidation {
         return value;
     }
 
+    static BigDecimal requireSupportedDecimal(BigDecimal value, String name) {
+        try {
+            value.stripTrailingZeros();
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException(name + " has an unsupported decimal scale", exception);
+        }
+        return value;
+    }
+
+    static void requireSupportedProduct(BigDecimal left, BigDecimal right, String name) {
+        try {
+            left.multiply(right);
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException(name + " has an unsupported combined decimal scale", exception);
+        }
+    }
+
+    static int normalizedScale(BigDecimal value) {
+        try {
+            return Math.max(0, value.stripTrailingZeros().scale());
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException("value has an unsupported decimal scale", exception);
+        }
+    }
+
     static void requireNonNegative(int value, String name) {
         if (value < 0) {
             throw new IllegalArgumentException(name + " must not be negative");

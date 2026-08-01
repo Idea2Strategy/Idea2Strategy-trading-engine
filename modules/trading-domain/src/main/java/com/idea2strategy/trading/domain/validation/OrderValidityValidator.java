@@ -1,6 +1,5 @@
 package com.idea2strategy.trading.domain.validation;
 
-import java.math.BigDecimal;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
@@ -23,7 +22,7 @@ public final class OrderValidityValidator {
 
         return new OrderValidityResult(
                 request.proposalId(),
-                statusFor(reasons),
+                OrderValidityStatus.forReasons(sortedReasons),
                 sortedReasons,
                 fundsSnapshotVersion(request),
                 instrumentPolicyVersion(request),
@@ -69,16 +68,12 @@ public final class OrderValidityValidator {
         if (request.quantity().multiply(request.price()).compareTo(policy.minimumNotional()) < 0) {
             reasons.add(OrderValidityReason.MINIMUM_NOTIONAL_NOT_MET);
         }
-        if (normalizedScale(request.quantity()) > policy.maximumQuantityScale()) {
+        if (OrderValidityInputValidation.normalizedScale(request.quantity()) > policy.maximumQuantityScale()) {
             reasons.add(OrderValidityReason.QUANTITY_PRECISION_EXCEEDED);
         }
-        if (normalizedScale(request.price()) > policy.maximumPriceScale()) {
+        if (OrderValidityInputValidation.normalizedScale(request.price()) > policy.maximumPriceScale()) {
             reasons.add(OrderValidityReason.PRICE_PRECISION_EXCEEDED);
         }
-    }
-
-    private static int normalizedScale(BigDecimal value) {
-        return Math.max(0, value.stripTrailingZeros().scale());
     }
 
     private static String fundsSnapshotVersion(OrderValidityRequest request) {
@@ -91,17 +86,4 @@ public final class OrderValidityValidator {
         return policy == null ? null : policy.version();
     }
 
-    private static OrderValidityStatus statusFor(EnumSet<OrderValidityReason> reasons) {
-        if (reasons.contains(OrderValidityReason.RISK_EVALUATION_UNAVAILABLE)
-                || reasons.contains(OrderValidityReason.RISK_LIMIT_EXCEEDED)
-                || reasons.contains(OrderValidityReason.RISK_REDUCTION_NOT_CONFIRMED)
-                || reasons.contains(OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE)
-                || reasons.contains(OrderValidityReason.MINIMUM_QUANTITY_NOT_MET)
-                || reasons.contains(OrderValidityReason.MINIMUM_NOTIONAL_NOT_MET)
-                || reasons.contains(OrderValidityReason.QUANTITY_PRECISION_EXCEEDED)
-                || reasons.contains(OrderValidityReason.PRICE_PRECISION_EXCEEDED)) {
-            return OrderValidityStatus.REJECTED;
-        }
-        return reasons.isEmpty() ? OrderValidityStatus.ACCEPTED : OrderValidityStatus.REEVALUATION_REQUIRED;
-    }
 }

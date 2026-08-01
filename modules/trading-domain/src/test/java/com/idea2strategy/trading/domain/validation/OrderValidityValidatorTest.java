@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -61,6 +62,16 @@ class OrderValidityValidatorTest {
     }
 
     @Test
+    void acceptsWhenRequiredCashExactlyMatchesAvailableCash() {
+        OrderValidityResult result = validator.validate(request(
+                "funds-v1", new AvailableFundsSnapshot("funds-v1", new BigDecimal("255.00")),
+                RiskDirection.INCREASING, true, List.of()));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
+    }
+
+    @Test
     void rejectsIncompleteRiskEvaluationWhilePreservingObservedEvidence() {
         OrderValidityResult result = validator.validate(request(
                 "funds-v1", validFunds(), RiskDirection.INCREASING, false,
@@ -93,6 +104,26 @@ class OrderValidityValidatorTest {
 
         assertEquals(OrderValidityStatus.REJECTED, result.status());
         assertEquals(List.of(OrderValidityReason.RISK_REDUCTION_NOT_CONFIRMED), result.reasons());
+    }
+
+    @Test
+    void acceptsIncreasingRiskExactlyAtMaximum() {
+        OrderValidityResult result = validator.validate(request(
+                RiskDirection.INCREASING, true,
+                List.of(metric("gross-exposure", "risk-v1", "90", "100", "100"))));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
+    }
+
+    @Test
+    void acceptsReducingRiskExactlyAtCurrentValue() {
+        OrderValidityResult result = validator.validate(request(
+                RiskDirection.REDUCING, true,
+                List.of(metric("gross-exposure", "risk-v1", "120", "120", "100"))));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
     }
 
     @Test
@@ -202,6 +233,22 @@ class OrderValidityValidatorTest {
                 OrderValidityReason.PRICE_PRECISION_EXCEEDED), result.reasons());
     }
 
+    @Test
+    void validatesSupportedExponentBoundaryDecimalsWithoutArithmeticFailure() {
+        BigDecimal smallestPositiveScale = new BigDecimal(BigInteger.ONE, Integer.MAX_VALUE);
+        BigDecimal largestTrailingZeroScale = new BigDecimal(BigInteger.TEN, Integer.MIN_VALUE + 1);
+
+        OrderValidityResult smallest = validator.validate(exponentBoundaryRequest(
+                smallestPositiveScale, Integer.MAX_VALUE));
+        OrderValidityResult largest = validator.validate(exponentBoundaryRequest(
+                largestTrailingZeroScale, 0));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, smallest.status());
+        assertTrue(smallest.reasons().isEmpty());
+        assertEquals(OrderValidityStatus.ACCEPTED, largest.status());
+        assertTrue(largest.reasons().isEmpty());
+    }
+
     private static OrderValidityRequest request(
             RiskDirection riskDirection,
             boolean riskEvaluationComplete,
@@ -231,6 +278,15 @@ class OrderValidityValidatorTest {
                 UUID.fromString("10000000-0000-0000-0000-000000000001"), quantityValue,
                 priceValue, quantityValue.multiply(priceValue), "funds-v1", validFunds(),
                 RiskDirection.INCREASING, true, List.of(), instrumentPolicy);
+    }
+
+    private static OrderValidityRequest exponentBoundaryRequest(BigDecimal quantity, int maximumQuantityScale) {
+        return new OrderValidityRequest(
+                UUID.fromString("10000000-0000-0000-0000-000000000001"), quantity,
+                BigDecimal.ONE, quantity, "funds-v1", new AvailableFundsSnapshot("funds-v1", quantity),
+                RiskDirection.INCREASING, true, List.of(),
+                new InstrumentNumericPolicy(
+                        "instrument-v1", BigDecimal.ZERO, BigDecimal.ZERO, maximumQuantityScale, 0));
     }
 
     private static InstrumentNumericPolicy instrumentPolicy() {

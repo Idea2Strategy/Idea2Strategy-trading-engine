@@ -19,8 +19,11 @@ public record OrderValidityRequest(
 
     public OrderValidityRequest {
         proposalId = OrderValidityInputValidation.requireNonNull(proposalId, "proposalId");
-        quantity = OrderValidityInputValidation.requireNonNegative(quantity, "quantity");
-        price = OrderValidityInputValidation.requireNonNegative(price, "price");
+        quantity = OrderValidityInputValidation.requireSupportedDecimal(
+                OrderValidityInputValidation.requireNonNegative(quantity, "quantity"), "quantity");
+        price = OrderValidityInputValidation.requireSupportedDecimal(
+                OrderValidityInputValidation.requireNonNegative(price, "price"), "price");
+        OrderValidityInputValidation.requireSupportedProduct(quantity, price, "quantity multiplied by price");
         totalRequiredCash = OrderValidityInputValidation.requireNonNegative(totalRequiredCash, "totalRequiredCash");
         allocationFundsSnapshotVersion = OrderValidityInputValidation.requireNonBlank(
                 allocationFundsSnapshotVersion, "allocationFundsSnapshotVersion");

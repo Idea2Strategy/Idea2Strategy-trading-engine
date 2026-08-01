@@ -29,11 +29,14 @@ public record OrderValidityResult(
                 Comparator.comparing(RiskPolicyEvidence::metricCode)
                         .thenComparing(RiskPolicyEvidence::policyVersion),
                 "riskPolicyEvidence");
-        if (status == OrderValidityStatus.ACCEPTED && !reasons.isEmpty()) {
-            throw new IllegalArgumentException("accepted results must not contain reasons");
+        OrderValidityStatus requiredStatus = OrderValidityStatus.forReasons(reasons);
+        if (status != requiredStatus) {
+            throw new IllegalArgumentException("status must match reason precedence");
         }
-        if (status != OrderValidityStatus.ACCEPTED && reasons.isEmpty()) {
-            throw new IllegalArgumentException("non-accepted results must contain at least one reason");
+        boolean instrumentPolicyUnavailable = reasons.contains(OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE);
+        if (instrumentPolicyUnavailable != (instrumentPolicyVersion == null)) {
+            throw new IllegalArgumentException(
+                    "instrumentPolicyVersion must be absent exactly when instrument policy is unavailable");
         }
     }
 }
