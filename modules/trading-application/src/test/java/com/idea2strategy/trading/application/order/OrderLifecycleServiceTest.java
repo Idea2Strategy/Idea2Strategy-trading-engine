@@ -113,6 +113,19 @@ class OrderLifecycleServiceTest {
     }
 
     @Test
+    void acceptsNullDaySessionCloseAndDelegatesExpireCommandUnchanged() {
+        RecordingStore store = new RecordingStore();
+        OrderLifecycle expected = new OrderLifecycleFactory().accepted(terms(), T0);
+        store.result = expected;
+        OrderLifecycleService service = new OrderLifecycleService(new OrderLifecycleFactory(), store);
+        ExpireOrderCommand expire = new ExpireOrderCommand(UUID.randomUUID(), expected.orderId(), 1, T1, null);
+
+        assertSame(expected, service.expire(expire));
+        assertSame(expire, store.command);
+        assertEquals(1, store.applyCalls);
+    }
+
+    @Test
     void rejectsNullCommandsBeforeCallingStore() {
         RecordingStore store = new RecordingStore();
         OrderLifecycleService service = new OrderLifecycleService(new OrderLifecycleFactory(), store);
@@ -149,7 +162,6 @@ class OrderLifecycleServiceTest {
         assertThrows(IllegalArgumentException.class, () -> new FillOrderCommand(commandId, orderId, 1, BigDecimal.ZERO, T1));
         assertThrows(IllegalArgumentException.class, () -> new FillOrderCommand(commandId, orderId, 1, BigDecimal.ONE, null));
         assertThrows(IllegalArgumentException.class, () -> new CancelOrderCommand(commandId, orderId, 1, " ", T1));
-        assertThrows(IllegalArgumentException.class, () -> new ExpireOrderCommand(commandId, orderId, 1, T1, null));
         assertThrows(IllegalArgumentException.class, () -> new ExpireOrderCommand(commandId, orderId, 1, T0, T1));
     }
 

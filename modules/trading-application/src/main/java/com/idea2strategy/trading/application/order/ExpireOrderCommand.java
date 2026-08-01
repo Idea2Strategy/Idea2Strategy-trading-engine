@@ -12,8 +12,7 @@ public record ExpireOrderCommand(
         orderId = required(orderId, "orderId");
         expectedVersion = positiveVersion(expectedVersion);
         occurredAt = required(occurredAt, "occurredAt");
-        daySessionClose = required(daySessionClose, "daySessionClose");
-        if (daySessionClose.isAfter(occurredAt)) {
+        if (daySessionClose != null && daySessionClose.isAfter(occurredAt)) {
             throw new IllegalArgumentException("daySessionClose must not be after occurredAt");
         }
     }
