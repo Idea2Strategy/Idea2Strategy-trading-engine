@@ -2,7 +2,7 @@ package com.idea2strategy.trading.domain.intent;
 
 import java.util.UUID;
 
-public final class OrderIntentBatchFactory {
+public class OrderIntentBatchFactory {
 
     public OrderIntentBatch create(OrderIntentBatchRequest request) {
         OrderIntentIdentityHashing.requireNonNull(request, "request");

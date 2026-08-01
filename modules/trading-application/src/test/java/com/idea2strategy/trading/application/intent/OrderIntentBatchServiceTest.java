@@ -25,6 +25,17 @@ class OrderIntentBatchServiceTest {
     }
 
     @Test
+    void rejectsNullRequestBeforeCallingTheFactoryOrStore() {
+        RecordingStore store = new RecordingStore(null);
+
+        assertThrows(
+                NullPointerException.class,
+                () -> new OrderIntentBatchService(new OrderIntentBatchFactory(), store).createOrLoad(null));
+
+        assertEquals(0, store.calls);
+    }
+
+    @Test
     void rejectsNullStoreResult() {
         assertThrows(
                 NullPointerException.class,
@@ -32,17 +43,20 @@ class OrderIntentBatchServiceTest {
     }
 
     @Test
-    void passesFactoryOutputToStoreOnceAndReturnsPersistedInstance() {
+    void forwardsTheExactSingleFactoryOutputToStoreAndReturnsPersistedInstance() {
         OrderIntentBatchRequest request = request();
         OrderIntentBatch desired = new OrderIntentBatchFactory().create(request);
         OrderIntentBatch persisted = copyOf(desired);
         RecordingStore store = new RecordingStore(persisted);
+        RecordingFactory factory = new RecordingFactory(desired);
 
-        OrderIntentBatch result = new OrderIntentBatchService(new OrderIntentBatchFactory(), store)
+        OrderIntentBatch result = new OrderIntentBatchService(factory, store)
                 .createOrLoad(request);
 
         assertSame(persisted, result);
-        assertEquals(desired, store.received);
+        assertSame(desired, store.received);
+        assertSame(request, factory.received);
+        assertEquals(1, factory.calls);
         assertEquals(1, store.calls);
     }
 
@@ -113,6 +127,23 @@ class OrderIntentBatchServiceTest {
             received = desired;
             calls++;
             throw conflict;
+        }
+    }
+
+    private static final class RecordingFactory extends OrderIntentBatchFactory {
+        private final OrderIntentBatch output;
+        private OrderIntentBatchRequest received;
+        private int calls;
+
+        private RecordingFactory(OrderIntentBatch output) {
+            this.output = output;
+        }
+
+        @Override
+        public OrderIntentBatch create(OrderIntentBatchRequest request) {
+            received = request;
+            calls++;
+            return output;
         }
     }
 }

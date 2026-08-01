@@ -28,7 +28,9 @@ class OrderIntentBatchFactoryTest {
                         forward.intents().stream().map(OrderIntentIdentity::candidateId).toList()),
                 () -> assertTrue(forward.requestFingerprint().matches("[0-9a-f]{64}")),
                 () -> assertEquals(5, forward.batchId().version()),
-                () -> assertTrue(forward.intents().stream().allMatch(intent -> intent.intentId().version() == 5)));
+                () -> assertEquals(2, forward.batchId().variant()),
+                () -> assertTrue(forward.intents().stream().allMatch(intent -> intent.intentId().version() == 5)),
+                () -> assertTrue(forward.intents().stream().allMatch(intent -> intent.intentId().variant() == 2)));
     }
 
     @Test
@@ -97,7 +99,24 @@ class OrderIntentBatchFactoryTest {
         OrderIntentBatchRequest request = request(candidates);
         candidates.clear();
 
-        assertEquals(List.of(candidateOne(), candidateTwo()), request.candidateIds());
+        assertAll(
+                () -> assertEquals(List.of(candidateOne(), candidateTwo()), request.candidateIds()),
+                () -> assertThrows(UnsupportedOperationException.class, () -> request.candidateIds().add(candidateThree())));
+    }
+
+    @Test
+    void batchCopiesAndExposesAnImmutableIntentList() {
+        ArrayList<OrderIntentIdentity> identities = new ArrayList<>(List.of(
+                new OrderIntentIdentity(intentOne(), candidateOne()),
+                new OrderIntentIdentity(intentTwo(), candidateTwo())));
+        OrderIntentBatch batch = new OrderIntentBatch(
+                batchId(), botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(), identities);
+        identities.clear();
+
+        assertAll(
+                () -> assertEquals(2, batch.intents().size()),
+                () -> assertThrows(UnsupportedOperationException.class,
+                        () -> batch.intents().add(new OrderIntentIdentity(intentOne(), candidateThree()))));
     }
 
     @Test
@@ -114,6 +133,8 @@ class OrderIntentBatchFactoryTest {
                         botId(), evaluationId(), null, List.of(candidateOne()))),
                 () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatchRequest(
                         botId(), evaluationId(), sourceCandidateBatchId(), Collections.singletonList(null))),
+                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatchRequest(
+                        botId(), evaluationId(), sourceCandidateBatchId(), null)),
                 () -> assertThrows(IllegalArgumentException.class, () -> request(List.of(candidateOne(), candidateOne()))),
                 () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentIdentity(null, candidateOne())),
                 () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentIdentity(intentOne(), null)),
