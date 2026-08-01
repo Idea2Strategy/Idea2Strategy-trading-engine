@@ -47,7 +47,11 @@ public final class CandidateBatchProcessor {
             statusPort.complete(batch.batchId());
             return CandidateBatchProcessingResult.PROCESSED;
         } catch (RuntimeException failure) {
-            statusPort.fail(batch.batchId(), boundedReason(failure));
+            try {
+                statusPort.fail(batch.batchId(), boundedReason(failure));
+            } catch (RuntimeException recordingFailure) {
+                failure.addSuppressed(recordingFailure);
+            }
             throw failure;
         }
     }

@@ -14,12 +14,8 @@ public class JpaCandidateBatchStatusAdapter implements CandidateBatchStatusPort 
     private final Clock clock;
 
     public JpaCandidateBatchStatusAdapter(CandidateBatchProcessingRepository repository) {
-        this(repository, Clock.systemUTC());
-    }
-
-    JpaCandidateBatchStatusAdapter(CandidateBatchProcessingRepository repository, Clock clock) {
         this.repository = Objects.requireNonNull(repository, "repository");
-        this.clock = Objects.requireNonNull(clock, "clock");
+        this.clock = Clock.systemUTC();
     }
 
     @Override

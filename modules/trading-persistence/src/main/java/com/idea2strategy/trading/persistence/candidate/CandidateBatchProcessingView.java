@@ -5,5 +5,6 @@ import java.util.UUID;
 public record CandidateBatchProcessingView(
         UUID batchId,
         UUID evaluationId,
-        CandidateBatchProcessingStatus status) {
+        CandidateBatchProcessingStatus status,
+        String failureReason) {
 }

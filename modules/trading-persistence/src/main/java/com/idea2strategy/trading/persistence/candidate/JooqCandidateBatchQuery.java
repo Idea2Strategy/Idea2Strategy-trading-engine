@@ -8,7 +8,7 @@ import org.jooq.Record;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public final class JooqCandidateBatchQuery {
+public class JooqCandidateBatchQuery {
     private final DSLContext dsl;
 
     public JooqCandidateBatchQuery(DSLContext dsl) {
@@ -17,7 +17,7 @@ public final class JooqCandidateBatchQuery {
 
     public Optional<CandidateBatchProcessingView> findByBatchId(UUID batchId) {
         return dsl.fetchOptional("""
-                        select batch_id, evaluation_id, status
+                        select batch_id, evaluation_id, status, failure_reason
                         from trading.candidate_batch_processing
                         where batch_id = ?
                         """, batchId)
@@ -32,6 +32,7 @@ public final class JooqCandidateBatchQuery {
         return new CandidateBatchProcessingView(
                 record.get("batch_id", UUID.class),
                 record.get("evaluation_id", UUID.class),
-                CandidateBatchProcessingStatus.valueOf(record.get("status", String.class)));
+                CandidateBatchProcessingStatus.valueOf(record.get("status", String.class)),
+                record.get("failure_reason", String.class));
     }
 }

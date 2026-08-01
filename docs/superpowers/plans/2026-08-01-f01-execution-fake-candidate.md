@@ -63,7 +63,7 @@
 - [ ] Run the focused persistence test and confirm it fails before adapters and migration exist.
 - [ ] Add dependencies, the Flyway migration, JPA entity/repository, atomic JDBC claim adapter, and jOOQ query adapter.
 - [ ] Run the focused persistence test and confirm it passes.
-- [ ] Add a concurrent-claim test using two threads and assert exactly one successful claim.
+- [ ] Add concurrent, failed-reclaim, and abandoned-processing tests; assert one active claimant and one durable row.
 - [ ] Run all persistence tests and commit as `feat: persist candidate batch claims atomically`.
 
 ### Task 3: Fake source, worker wiring, and independent startup
@@ -80,9 +80,9 @@
 - Consumes: application processor and persistence adapters.
 - Produces: opt-in fake batch delivery and deterministic fake order/execution/settlement adapters.
 
-- [ ] Replace the empty context test with a PostgreSQL Testcontainers startup test that enables Flyway and leaves the fake source disabled.
+- [ ] Replace the empty context test with a PostgreSQL Testcontainers startup test that enables Flyway and explicitly enables the complete fake stack.
 - [ ] Run the focused worker test and confirm it fails because datasource and persistence wiring are absent.
-- [ ] Add datasource/Flyway/Testcontainers dependencies, persistence configuration, fake downstream adapters, and opt-in fake source configuration.
+- [ ] Add datasource/Flyway/Testcontainers dependencies, persistence configuration, and one property-gated fake source/downstream stack; default production startup must not silently install fake ports.
 - [ ] Run the worker startup test and confirm it passes.
 - [ ] Add a fake-source-enabled test and assert the batch processing query reports one completed row.
 - [ ] Run all worker tests and commit as `feat: wire standalone fake candidate worker`.

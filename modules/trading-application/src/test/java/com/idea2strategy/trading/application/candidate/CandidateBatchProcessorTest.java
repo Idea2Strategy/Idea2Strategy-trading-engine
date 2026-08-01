@@ -60,6 +60,38 @@ class CandidateBatchProcessorTest {
         assertEquals(List.of(new Failure(batch.batchId(), "execution unavailable")), ports.failures);
     }
 
+    @Test
+    void failureRecordingDoesNotMaskOriginalFailure() {
+        RecordingPorts ports = new RecordingPorts();
+        IllegalStateException executionFailure = new IllegalStateException("execution unavailable");
+        IllegalStateException recordingFailure = new IllegalStateException("status store unavailable");
+        ports.executionFailure = executionFailure;
+        ports.failureRecordingFailure = recordingFailure;
+
+        IllegalStateException thrown = assertThrows(
+                IllegalStateException.class,
+                () -> ports.processor().process(candidateBatch()));
+
+        assertSame(executionFailure, thrown);
+        assertEquals(List.of(recordingFailure), List.of(thrown.getSuppressed()));
+    }
+
+    @Test
+    void failedBatchCanBeRetriedWithoutDuplicatingDownstreamEffects() {
+        RecordingPorts ports = new RecordingPorts();
+        ports.executionFailure = new IllegalStateException("temporary execution failure");
+        CandidateBatch batch = candidateBatch();
+        assertThrows(IllegalStateException.class, () -> ports.processor().process(batch));
+
+        ports.executionFailure = null;
+        CandidateBatchProcessingResult retried = ports.processor().process(batch);
+
+        assertEquals(CandidateBatchProcessingResult.PROCESSED, retried);
+        assertEquals(1, ports.orders.stream().map(Order::orderId).distinct().count());
+        assertEquals(1, ports.executions.stream().map(Execution::executionId).distinct().count());
+        assertEquals(1, ports.settlements.stream().map(Settlement::settlementId).distinct().count());
+    }
+
     private static CandidateBatch candidateBatch() {
         return new CandidateBatch(
                 UUID.fromString("10000000-0000-0000-0000-000000000001"),
@@ -80,12 +112,14 @@ class CandidateBatchProcessorTest {
     private static final class RecordingPorts
             implements CandidateBatchClaimPort, CandidateBatchStatusPort, OrderPort, ExecutionPort, SettlementPort {
         private final Set<UUID> claimedBatchIds = new HashSet<>();
+        private final Set<UUID> failedBatchIds = new HashSet<>();
         private final List<UUID> completedBatchIds = new ArrayList<>();
         private final List<Failure> failures = new ArrayList<>();
         private final List<Order> orders = new ArrayList<>();
         private final List<Execution> executions = new ArrayList<>();
         private final List<Settlement> settlements = new ArrayList<>();
         private RuntimeException executionFailure;
+        private RuntimeException failureRecordingFailure;
 
         CandidateBatchProcessor processor() {
             return new CandidateBatchProcessor(this, this, this, this, this);
@@ -93,7 +127,7 @@ class CandidateBatchProcessorTest {
 
         @Override
         public boolean claim(CandidateBatch batch) {
-            return claimedBatchIds.add(batch.batchId());
+            return claimedBatchIds.add(batch.batchId()) || failedBatchIds.remove(batch.batchId());
         }
 
         @Override
@@ -104,6 +138,10 @@ class CandidateBatchProcessorTest {
         @Override
         public void fail(UUID batchId, String reason) {
             failures.add(new Failure(batchId, reason));
+            failedBatchIds.add(batchId);
+            if (failureRecordingFailure != null) {
+                throw failureRecordingFailure;
+            }
         }
 
         @Override

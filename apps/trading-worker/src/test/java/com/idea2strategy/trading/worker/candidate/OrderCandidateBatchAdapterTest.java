@@ -1,6 +1,7 @@
 package com.idea2strategy.trading.worker.candidate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.idea2strategy.trading.domain.candidate.CandidateBatch;
 import com.idea2strategy.trading.messaging.evaluation.OrderCandidate;
@@ -40,5 +41,17 @@ class OrderCandidateBatchAdapterTest {
         assertEquals(new BigDecimal("3.5"), translated.candidates().getFirst().quantity());
         assertEquals(new BigDecimal("42.75"), translated.candidates().getFirst().limitPrice());
         assertEquals(List.of("rebalance", "risk-approved"), translated.candidates().getFirst().reasonCodes());
+    }
+
+    @Test
+    void rejectsUnsupportedSchemaVersion() {
+        OrderCandidateBatch source = new OrderCandidateBatch(
+                2,
+                UUID.fromString("10000000-0000-0000-0000-000000000001"),
+                UUID.fromString("20000000-0000-0000-0000-000000000002"),
+                Instant.parse("2026-08-01T00:00:00Z"),
+                List.of());
+
+        assertThrows(IllegalArgumentException.class, () -> new OrderCandidateBatchAdapter().toDomain(source));
     }
 }

@@ -10,6 +10,9 @@ import org.springframework.stereotype.Component;
 public final class OrderCandidateBatchAdapter {
 
     public CandidateBatch toDomain(OrderCandidateBatch source) {
+        if (source.schemaVersion() != 1) {
+            throw new IllegalArgumentException("Unsupported order candidate batch schema version: " + source.schemaVersion());
+        }
         return new CandidateBatch(
                 source.batchId(),
                 source.evaluationId(),

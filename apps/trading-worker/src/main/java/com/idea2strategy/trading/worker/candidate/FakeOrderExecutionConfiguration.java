@@ -9,15 +9,15 @@ import com.idea2strategy.trading.domain.settlement.Settlement;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(prefix = "trading.fake-candidate", name = "enabled", havingValue = "true")
 public class FakeOrderExecutionConfiguration {
 
     @Bean
-    @ConditionalOnMissingBean(OrderPort.class)
     OrderPort fakeOrderPort() {
         return candidate -> new Order(
                 stableId("order", candidate.candidateId()),
@@ -29,7 +29,6 @@ public class FakeOrderExecutionConfiguration {
     }
 
     @Bean
-    @ConditionalOnMissingBean(ExecutionPort.class)
     ExecutionPort fakeExecutionPort() {
         return order -> new Execution(
                 stableId("execution", order.orderId()),
@@ -39,7 +38,6 @@ public class FakeOrderExecutionConfiguration {
     }
 
     @Bean
-    @ConditionalOnMissingBean(SettlementPort.class)
     SettlementPort fakeSettlementPort() {
         return execution -> new Settlement(
                 stableId("settlement", execution.executionId()),

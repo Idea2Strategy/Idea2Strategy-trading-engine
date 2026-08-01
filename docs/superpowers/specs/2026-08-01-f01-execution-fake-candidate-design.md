@@ -45,15 +45,17 @@ The domain module owns small order, execution, and settlement value objects and 
 
 The processing table has one row per `batch_id`, a unique primary key, the evaluation ID, source creation time, processing status, timestamps, and an optional failure reason. Flyway creates the `trading` schema and table for standalone tests. The root DBML remains authoritative and is not changed in F01; root integration can reconcile the new physical table separately.
 
-The claim command uses PostgreSQL `INSERT ... ON CONFLICT DO NOTHING`. Completion and failure updates use a Spring Data JPA repository. Read-side inspection is exposed through a jOOQ query adapter, keeping query construction out of the command adapter.
+The claim command uses one PostgreSQL `INSERT ... ON CONFLICT DO UPDATE` statement. It admits a new batch, reacquires a `FAILED` batch, or reclaims a `PROCESSING` batch whose heartbeat is older than fifteen minutes; a completed or active batch remains a duplicate. Completion and failure updates use a Spring Data JPA repository. Read-side inspection is exposed through a jOOQ query adapter, keeping query construction out of the command adapter. Because recovery can repeat downstream calls, every order, execution, and settlement port is required to be idempotent by its stable source identifier.
 
 ## Failure Behavior
 
 - A duplicate batch returns `DUPLICATE` and produces no downstream effects.
 - An empty candidate list is a valid batch and completes after admission.
-- A downstream port exception marks the batch failed and propagates.
+- A downstream port exception marks the batch failed and propagates. A later delivery reacquires the failed claim and repeats idempotent downstream calls.
+- A processing claim abandoned for fifteen minutes becomes eligible for atomic reclamation.
 - A database admission failure propagates; processing never starts without a durable claim.
 - Failure text is bounded before persistence so arbitrary exception payloads do not expand the row indefinitely.
+- A failure while recording failure status is attached as a suppressed exception so the original processing error remains visible.
 
 ## Verification
 

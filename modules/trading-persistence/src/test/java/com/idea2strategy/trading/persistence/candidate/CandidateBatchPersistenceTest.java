@@ -59,7 +59,11 @@ class CandidateBatchPersistenceTest {
         assertFalse(duplicate);
         assertEquals(1, query.count());
         assertEquals(
-                new CandidateBatchProcessingView(BATCH_ID, batch.evaluationId(), CandidateBatchProcessingStatus.PROCESSING),
+                new CandidateBatchProcessingView(
+                        BATCH_ID,
+                        batch.evaluationId(),
+                        CandidateBatchProcessingStatus.PROCESSING,
+                        null),
                 query.findByBatchId(BATCH_ID).orElseThrow());
     }
 
@@ -82,6 +86,36 @@ class CandidateBatchPersistenceTest {
             assertEquals(1, List.of(first.get(), second.get()).stream().filter(Boolean::booleanValue).count());
             assertEquals(1, query.count());
         }
+    }
+
+    @Test
+    void failedBatchClaimCanBeReacquired() {
+        assertTrue(claimAdapter.claim(candidateBatch()));
+        JdbcClient.create(dataSource).sql("""
+                        update trading.candidate_batch_processing
+                        set status = 'FAILED', failure_reason = 'temporary failure'
+                        where batch_id = :batchId
+                        """)
+                .param("batchId", BATCH_ID)
+                .update();
+
+        assertTrue(claimAdapter.claim(candidateBatch()));
+        assertEquals(CandidateBatchProcessingStatus.PROCESSING, query.findByBatchId(BATCH_ID).orElseThrow().status());
+    }
+
+    @Test
+    void abandonedProcessingClaimCanBeReacquired() {
+        assertTrue(claimAdapter.claim(candidateBatch()));
+        JdbcClient.create(dataSource).sql("""
+                        update trading.candidate_batch_processing
+                        set updated_at = current_timestamp - interval '16 minutes'
+                        where batch_id = :batchId
+                        """)
+                .param("batchId", BATCH_ID)
+                .update();
+
+        assertTrue(claimAdapter.claim(candidateBatch()));
+        assertEquals(1, query.count());
     }
 
     private static CandidateBatch candidateBatch() {
