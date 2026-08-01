@@ -30,9 +30,18 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
               end
             end
 
-            assert_type(KEYS[1], 'stream')
-            assert_type(KEYS[2], 'hash')
-            assert_type(KEYS[3], 'set')
+            local type_error = assert_type(KEYS[1], 'stream')
+            if type_error ~= nil then
+              return type_error
+            end
+            type_error = assert_type(KEYS[2], 'hash')
+            if type_error ~= nil then
+              return type_error
+            end
+            type_error = assert_type(KEYS[3], 'set')
+            if type_error ~= nil then
+              return type_error
+            end
 
             if redis.call('SADD', KEYS[3], ARGV[1]) == 0 then
               return {0, '', 0}
