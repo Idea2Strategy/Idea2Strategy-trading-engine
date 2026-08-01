@@ -82,6 +82,19 @@ class OrderLifecycleServiceTest {
     }
 
     @Test
+    void rejectsNullResultFromDirectMutationDelegation() {
+        RecordingStore store = new RecordingStore();
+        OrderLifecycle expected = new OrderLifecycleFactory().accepted(terms(), T0);
+        OrderLifecycleService service = new OrderLifecycleService(new OrderLifecycleFactory(), store);
+        FillOrderCommand command = new FillOrderCommand(UUID.randomUUID(), expected.orderId(), 1, BigDecimal.ONE, T1);
+
+        assertThrows(IllegalArgumentException.class, () -> service.applyFill(command));
+
+        assertSame(command, store.command);
+        assertEquals(1, store.applyCalls);
+    }
+
+    @Test
     void forwardsFillCommandWithoutMutationAndReturnsStoreResult() {
         RecordingStore store = new RecordingStore();
         OrderLifecycle expected = new OrderLifecycleFactory().accepted(terms(), T0);
@@ -149,6 +162,24 @@ class OrderLifecycleServiceTest {
                 () -> service.createAccepted(terms(), T0));
 
         assertSame(failure, thrown);
+    }
+
+    @Test
+    void propagatesDirectMutationStoreExceptionsWithoutTranslation() {
+        RecordingStore store = new RecordingStore();
+        OrderLifecycle expected = new OrderLifecycleFactory().accepted(terms(), T0);
+        OrderLifecycleConflictException failure = new OrderLifecycleConflictException("command already exists");
+        store.failure = failure;
+        OrderLifecycleService service = new OrderLifecycleService(new OrderLifecycleFactory(), store);
+        FillOrderCommand command = new FillOrderCommand(UUID.randomUUID(), expected.orderId(), 1, BigDecimal.ONE, T1);
+
+        OrderLifecycleConflictException thrown = assertThrows(
+                OrderLifecycleConflictException.class,
+                () -> service.applyFill(command));
+
+        assertSame(failure, thrown);
+        assertSame(command, store.command);
+        assertEquals(1, store.applyCalls);
     }
 
     @Test
