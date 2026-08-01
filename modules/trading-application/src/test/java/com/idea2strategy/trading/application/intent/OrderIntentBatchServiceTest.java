@@ -29,7 +29,7 @@ class OrderIntentBatchServiceTest {
         RecordingStore store = new RecordingStore(null);
 
         assertThrows(
-                NullPointerException.class,
+                IllegalArgumentException.class,
                 () -> new OrderIntentBatchService(new OrderIntentBatchFactory(), store).createOrLoad(null));
 
         assertEquals(0, store.calls);

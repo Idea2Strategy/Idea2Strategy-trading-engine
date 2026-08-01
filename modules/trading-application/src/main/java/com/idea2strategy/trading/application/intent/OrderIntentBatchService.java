@@ -16,7 +16,7 @@ public final class OrderIntentBatchService {
     }
 
     public OrderIntentBatch createOrLoad(OrderIntentBatchRequest request) {
-        OrderIntentBatch desired = factory.create(Objects.requireNonNull(request, "request"));
+        OrderIntentBatch desired = factory.create(request);
         return Objects.requireNonNull(store.createOrLoad(desired), "store result");
     }
 }

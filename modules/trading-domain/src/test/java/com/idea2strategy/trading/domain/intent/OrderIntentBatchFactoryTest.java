@@ -34,6 +34,20 @@ class OrderIntentBatchFactoryTest {
     }
 
     @Test
+    void createsTheApprovedDeterministicGoldenVector() {
+        OrderIntentBatch batch = factory.create(request(List.of(candidateTwo(), candidateOne())));
+
+        assertAll(
+                () -> assertEquals(UUID.fromString("c57f84cb-a69c-5dc3-86d7-45cbf9136b30"), batch.batchId()),
+                () -> assertEquals(List.of(
+                        UUID.fromString("9a701646-1970-51c6-9393-12eb10d6f437"),
+                        UUID.fromString("fb7cd373-3c3d-56d0-928e-34b66123f082")),
+                        batch.intents().stream().map(OrderIntentIdentity::intentId).toList()),
+                () -> assertEquals("7650f25d161c85c668492c1550149d42ec005694cbe4e205b13c97fa746f7f8b",
+                        batch.requestFingerprint()));
+    }
+
+    @Test
     void createsAnEmptyDurableAggregateForAnEmptyRequest() {
         OrderIntentBatch batch = factory.create(request(List.of()));
 
