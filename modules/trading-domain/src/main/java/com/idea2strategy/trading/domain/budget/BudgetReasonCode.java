@@ -1,0 +1,9 @@
+package com.idea2strategy.trading.domain.budget;
+
+public enum BudgetReasonCode {
+    STRATEGY_BUDGET_CAP,
+    COMMON_FUNDS_PROPORTIONAL_REDUCTION,
+    NO_AVAILABLE_STRATEGY_BUDGET,
+    NO_AVAILABLE_SHARED_FUNDS,
+    POSITION_VALUATION_UNAVAILABLE
+}
