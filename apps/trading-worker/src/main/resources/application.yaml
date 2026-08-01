@@ -5,3 +5,10 @@ spring:
     web-application-type: none
     banner-mode: "off"
     keep-alive: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+trading:
+  fake-candidate:
+    enabled: false
