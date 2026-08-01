@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "trading.v1",
+  "eventType": "order.rejected",
+  "eventId": "00000000-0000-0000-0000-000000000504",
+  "occurredAt": "2026-07-31T14:30:00Z",
+  "producer": "trading-worker",
+  "correlationId": "00000000-0000-0000-0000-000000000801",
+  "causationId": "00000000-0000-0000-0000-000000000302",
+  "idempotencyKey": "rejected-00000000-0000-0000-0000-000000000504",
+  "aggregateId": "00000000-0000-0000-0000-000000000403",
+  "aggregateVersion": 1,
+  "payload": { "orderId": "00000000-0000-0000-0000-000000000403", "intentId": "00000000-0000-0000-0000-000000000313", "candidateId": "00000000-0000-0000-0000-000000000213", "type": "REJECTED", "orderQuantity": { "value": "5" }, "fillQuantity": null, "fillPrice": null, "ledgerTransaction": null, "reasonCode": "INSUFFICIENT_BUYING_POWER" }
+}

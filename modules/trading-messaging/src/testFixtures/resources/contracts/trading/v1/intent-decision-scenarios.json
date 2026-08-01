@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "trading.v1",
+  "eventType": "order.intent-batch",
+  "eventId": "00000000-0000-0000-0000-000000000302",
+  "occurredAt": "2026-07-31T14:30:00Z",
+  "producer": "trading-worker",
+  "correlationId": "00000000-0000-0000-0000-000000000801",
+  "causationId": "00000000-0000-0000-0000-000000000201",
+  "idempotencyKey": "intent-batch-00000000-0000-0000-0000-000000000201",
+  "aggregateId": "00000000-0000-0000-0000-000000000302",
+  "aggregateVersion": 1,
+  "payload": {
+    "batchId": "00000000-0000-0000-0000-000000000302",
+    "botId": "00000000-0000-0000-0000-000000000101",
+    "evaluationId": "00000000-0000-0000-0000-000000000103",
+    "intents": [
+      { "intentId": "00000000-0000-0000-0000-000000000311", "candidateId": "00000000-0000-0000-0000-000000000211", "instrumentId": "00000000-0000-0000-0000-000000000104", "side": "BUY", "orderType": "MARKET", "orderParameters": { "limitPrice": null, "stopPrice": null, "trailPercent": null }, "timeInForce": "DAY", "expiresAt": null, "quantityMode": "FRACTIONAL_SHARES", "requestedQuantity": { "value": "10.5" }, "approvedQuantity": { "value": "10.5" }, "decision": "ACCEPTED", "reasonCode": null, "costPolicy": { "version": "virtual-fill-cost-v1", "feeRate": { "value": "0.002" }, "slippageRate": { "value": "0.0005" } } },
+      { "intentId": "00000000-0000-0000-0000-000000000312", "candidateId": "00000000-0000-0000-0000-000000000212", "instrumentId": "00000000-0000-0000-0000-000000000104", "side": "BUY", "orderType": "MARKET", "orderParameters": { "limitPrice": null, "stopPrice": null, "trailPercent": null }, "timeInForce": "DAY", "expiresAt": null, "quantityMode": "WHOLE_SHARES", "requestedQuantity": { "value": "20" }, "approvedQuantity": { "value": "10" }, "decision": "REDUCED", "reasonCode": "RISK_LIMIT", "costPolicy": { "version": "virtual-fill-cost-v1", "feeRate": { "value": "0.002" }, "slippageRate": { "value": "0.0005" } } },
+      { "intentId": "00000000-0000-0000-0000-000000000313", "candidateId": "00000000-0000-0000-0000-000000000213", "instrumentId": "00000000-0000-0000-0000-000000000104", "side": "SELL", "orderType": "MARKET", "orderParameters": { "limitPrice": null, "stopPrice": null, "trailPercent": null }, "timeInForce": "DAY", "expiresAt": null, "quantityMode": "WHOLE_SHARES", "requestedQuantity": { "value": "5" }, "approvedQuantity": { "value": "0" }, "decision": "REJECTED", "reasonCode": "POSITION_CONSTRAINT", "costPolicy": { "version": "virtual-fill-cost-v1", "feeRate": { "value": "0.002" }, "slippageRate": { "value": "0.0005" } } }
+    ]
+  }
+}
