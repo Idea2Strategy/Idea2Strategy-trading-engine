@@ -72,6 +72,54 @@ public final class OrderedJudgmentJournal {
         }
     }
 
+    public void restore(BotJudgmentSnapshot snapshot) {
+        Objects.requireNonNull(snapshot, "snapshot must not be null");
+        BotJournal recovered = recover(snapshot);
+        if (journals.putIfAbsent(snapshot.botId(), recovered) != null) {
+            throw failure(
+                    JudgmentAppendFailure.RESTORE_TARGET_NOT_EMPTY,
+                    "a journal already exists for the restored bot");
+        }
+    }
+
+    private static BotJournal recover(BotJudgmentSnapshot snapshot) {
+        BotJournal recovered = new BotJournal();
+        try {
+            for (JudgmentEntry entry : snapshot.entries()) {
+                long expectedSequence = recovered.entries.size() + 1L;
+                if (entry.sequence() != expectedSequence) {
+                    throw invalidSnapshot("journal entry sequence is not contiguous");
+                }
+                JudgmentEventDraft draft = new JudgmentEventDraft(
+                        entry.eventId(),
+                        entry.type(),
+                        entry.subject(),
+                        entry.evidence(),
+                        entry.runtimeStateTransition());
+                if (recovered.entriesById.putIfAbsent(entry.eventId(), entry) != null) {
+                    throw invalidSnapshot("journal event identity is duplicated");
+                }
+                FirstFailureKey firstFailureKey = firstFailureKey(draft);
+                if (firstFailureKey != null && !recovered.firstFailures.add(firstFailureKey)) {
+                    throw invalidSnapshot("journal has more than one official first failure");
+                }
+                recovered.runtimeState = validateRuntimeTransition(recovered.runtimeState, draft);
+                recovered.entries.add(entry);
+            }
+            if (!recovered.runtimeState.equals(snapshot.runtimeState())) {
+                throw invalidSnapshot("projected runtime state does not match journal transitions");
+            }
+            return recovered;
+        } catch (JudgmentAppendException exception) {
+            if (exception.failure() == JudgmentAppendFailure.SNAPSHOT_INVALID) {
+                throw exception;
+            }
+            throw invalidSnapshot("journal transition is invalid", exception);
+        } catch (IllegalArgumentException exception) {
+            throw invalidSnapshot("journal entry meaning is invalid", exception);
+        }
+    }
+
     private static FirstFailureKey firstFailureKey(JudgmentEventDraft draft) {
         if (draft.type() != JudgmentEventType.FIRST_CONDITION_FAILED) {
             return null;
@@ -105,6 +153,16 @@ public final class OrderedJudgmentJournal {
 
     private static JudgmentAppendException failure(JudgmentAppendFailure failure, String message) {
         return new JudgmentAppendException(failure, message);
+    }
+
+    private static JudgmentAppendException invalidSnapshot(String message) {
+        return failure(JudgmentAppendFailure.SNAPSHOT_INVALID, message);
+    }
+
+    private static JudgmentAppendException invalidSnapshot(String message, RuntimeException cause) {
+        JudgmentAppendException exception = invalidSnapshot(message);
+        exception.initCause(cause);
+        return exception;
     }
 
     private static final class BotJournal {
