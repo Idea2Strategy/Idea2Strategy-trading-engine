@@ -95,6 +95,20 @@ class OrderLifecyclePersistenceTest {
     }
 
     @Test
+    void exactCreationRetryAfterTransitionReturnsLatestSnapshotAcrossRestart() {
+        OrderLifecycle desired = store.createOrLoad(acceptedOrder(2, TimeInForce.DAY, null));
+        OrderLifecycle advanced = store.apply(fill(21, desired, 1, "2", T1));
+
+        OrderLifecycle replayed = store.createOrLoad(desired);
+        OrderLifecycle restartedReplay = newStore().createOrLoad(desired);
+
+        assertEquals(advanced, replayed);
+        assertEquals(advanced, restartedReplay);
+        assertEquals(List.of(1L, 2L), versions(desired.orderId()));
+        assertEquals(2, receiptCount(desired.orderId()));
+    }
+
+    @Test
     void concurrentIdenticalCreationConvergesOnOneAtomicLifecycle() throws Exception {
         OrderLifecycle desired = acceptedOrder(3, TimeInForce.DAY, null);
         CountDownLatch ready = new CountDownLatch(2);
@@ -181,6 +195,18 @@ class OrderLifecyclePersistenceTest {
 
         assertThrows(IllegalArgumentException.class, () -> store.createOrLoad(tooPreciseQuantity));
         assertThrows(IllegalArgumentException.class, () -> store.createOrLoad(tooPreciseTimestamp));
+        assertEquals(0, count("trading.trading_order"));
+        assertEquals(0, count("trading.order_lifecycle_transition"));
+        assertEquals(0, count("trading.order_lifecycle_command"));
+    }
+
+    @Test
+    void creationRejectsAdvancedAggregateBeforeWritingAnything() {
+        OrderLifecycle initial = acceptedOrder(7, TimeInForce.DAY, null);
+        OrderLifecycle advanced = initial.applyFill(new BigDecimal("2"), T1);
+
+        assertThrows(IllegalArgumentException.class, () -> store.createOrLoad(advanced));
+
         assertEquals(0, count("trading.trading_order"));
         assertEquals(0, count("trading.order_lifecycle_transition"));
         assertEquals(0, count("trading.order_lifecycle_command"));
@@ -519,6 +545,31 @@ class OrderLifecyclePersistenceTest {
     }
 
     @Test
+    void snapshotConstraintsRejectImpossibleExpirationStates() {
+        OrderLifecycle gtc = create(acceptedOrder(87, TimeInForce.GTC, null));
+        OrderLifecycle earlyGtd = create(acceptedOrder(88, TimeInForce.GTD, T2));
+        OrderLifecycle wrongGtdReason = create(acceptedOrder(89, TimeInForce.GTD, T2));
+        OrderLifecycle wrongDayReason = create(acceptedOrder(90, TimeInForce.DAY, null));
+
+        assertRejectedUpdate(
+                "status = 'EXPIRED', version = 2, last_transition_at = created_at + interval '1 minute', "
+                        + "terminal_reason = 'GTD_EXPIRY'",
+                gtc.orderId());
+        assertRejectedUpdate(
+                "status = 'EXPIRED', version = 2, last_transition_at = created_at + interval '1 minute', "
+                        + "terminal_reason = 'GTD_EXPIRY'",
+                earlyGtd.orderId());
+        assertRejectedUpdate(
+                "status = 'EXPIRED', version = 2, last_transition_at = expires_at, "
+                        + "terminal_reason = 'DAY_SESSION_CLOSE'",
+                wrongGtdReason.orderId());
+        assertRejectedUpdate(
+                "status = 'EXPIRED', version = 2, last_transition_at = created_at + interval '1 minute', "
+                        + "terminal_reason = 'GTD_EXPIRY'",
+                wrongDayReason.orderId());
+    }
+
+    @Test
     void lifecycleNumericColumnsUseExactPrecisionAndScale() {
         List<String> numericColumns = jdbcClient.sql("""
                         select table_name || '.' || column_name
@@ -603,6 +654,40 @@ class OrderLifecyclePersistenceTest {
                 .param("commandId", malformedFillCommand)
                 .param("occurredAt", T1.atOffset(java.time.ZoneOffset.UTC))
                 .update());
+    }
+
+    @Test
+    void transitionConstraintsRejectNullSourceAfterVersionOne() {
+        OrderLifecycle desired = create(acceptedOrder(92, TimeInForce.DAY, null));
+        UUID commandId = commandId(921);
+        insertReceipt(commandId, desired.orderId(), 2, OrderStatus.PARTIALLY_FILLED, fingerprint('f'));
+
+        assertThrows(DataIntegrityViolationException.class, () -> jdbcClient.sql("""
+                        insert into trading.order_lifecycle_transition (
+                            order_id, version, command_id, from_status, to_status,
+                            fill_delta, cumulative_filled_quantity, occurred_at, reason
+                        ) values (
+                            :orderId, 2, :commandId, null, 'PARTIALLY_FILLED',
+                            1, 1, :occurredAt, null
+                        )
+                        """)
+                .param("orderId", desired.orderId())
+                .param("commandId", commandId)
+                .param("occurredAt", T1.atOffset(java.time.ZoneOffset.UTC))
+                .update());
+    }
+
+    @Test
+    void transitionConstraintsRejectImpossibleExpirationEvents() {
+        OrderLifecycle gtc = create(acceptedOrder(93, TimeInForce.GTC, null));
+        OrderLifecycle earlyGtd = create(acceptedOrder(94, TimeInForce.GTD, T2));
+        OrderLifecycle wrongGtdReason = create(acceptedOrder(95, TimeInForce.GTD, T2));
+        OrderLifecycle wrongDayReason = create(acceptedOrder(96, TimeInForce.DAY, null));
+
+        assertRejectedExpirationTransition(gtc, 931, T1, "GTD_EXPIRY");
+        assertRejectedExpirationTransition(earlyGtd, 941, T1, "GTD_EXPIRY");
+        assertRejectedExpirationTransition(wrongGtdReason, 951, T2, "DAY_SESSION_CLOSE");
+        assertRejectedExpirationTransition(wrongDayReason, 961, T1, "GTD_EXPIRY");
     }
 
     @Test
@@ -728,6 +813,26 @@ class OrderLifecyclePersistenceTest {
                 .param("status", status.name())
                 .update();
         assertEquals(1, inserted);
+    }
+
+    private static void assertRejectedExpirationTransition(
+            OrderLifecycle current, int commandSuffix, Instant occurredAt, String reason) {
+        UUID commandId = commandId(commandSuffix);
+        insertReceipt(commandId, current.orderId(), 2, OrderStatus.EXPIRED, fingerprint('e'));
+        assertThrows(DataIntegrityViolationException.class, () -> jdbcClient.sql("""
+                        insert into trading.order_lifecycle_transition (
+                            order_id, version, command_id, from_status, to_status,
+                            fill_delta, cumulative_filled_quantity, occurred_at, reason
+                        ) values (
+                            :orderId, 2, :commandId, 'ACCEPTED', 'EXPIRED',
+                            null, 0, :occurredAt, :reason
+                        )
+                        """)
+                .param("orderId", current.orderId())
+                .param("commandId", commandId)
+                .param("occurredAt", occurredAt.atOffset(java.time.ZoneOffset.UTC))
+                .param("reason", reason)
+                .update());
     }
 
     private static void assertCorruptStateFails(int suffix, String update, List<String> constraintsToDrop) {

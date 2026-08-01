@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.idea2strategy.trading.application.candidate.CandidateBatchClaimLostException;
 import com.idea2strategy.trading.application.order.FillOrderCommand;
@@ -182,5 +183,44 @@ class TradingWorkerApplicationTest {
         assertEquals(List.of(1L, 2L), orderLifecycleQuery.findTransitions(desired.orderId()).stream()
                 .map(JooqOrderLifecycleQuery.TransitionView::version)
                 .toList());
+    }
+
+    @Test
+    void lifecycleWritesEnlistInCallerOwnedJpaTransactionRollback() {
+        assertInstanceOf(JpaTransactionManager.class, transactionManager);
+        OrderLifecycle desired = new OrderLifecycleFactory().accepted(new OrderTerms(
+                UUID.fromString("c1000000-0000-0000-0000-000000000001"),
+                UUID.fromString("c2000000-0000-0000-0000-000000000002"),
+                UUID.fromString("c3000000-0000-0000-0000-000000000003"),
+                OrderSide.BUY,
+                new BigDecimal("5"),
+                OrderType.MARKET,
+                TimeInForce.DAY,
+                null,
+                null,
+                null,
+                null), Instant.parse("2026-08-01T02:00:00Z"));
+        FillOrderCommand partialFill = new FillOrderCommand(
+                UUID.fromString("c4000000-0000-0000-0000-000000000004"),
+                desired.orderId(),
+                1,
+                new BigDecimal("2"),
+                Instant.parse("2026-08-01T02:01:00Z"));
+        TransactionTemplate outerTransaction = new TransactionTemplate(transactionManager);
+
+        outerTransaction.executeWithoutResult(status -> {
+            orderLifecycleStore.createOrLoad(desired);
+            orderLifecycleStore.apply(partialFill);
+            status.setRollbackOnly();
+        });
+
+        assertFalse(orderLifecycleQuery.findByOrderId(desired.orderId()).isPresent());
+        assertTrue(orderLifecycleQuery.findTransitions(desired.orderId()).isEmpty());
+        assertEquals(0, jdbcClient.sql("""
+                        select count(*) from trading.order_lifecycle_command where order_id = :orderId
+                        """)
+                .param("orderId", desired.orderId())
+                .query(Integer.class)
+                .single());
     }
 }

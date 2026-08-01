@@ -84,6 +84,14 @@ create table trading.trading_order (
                     or (cumulative_filled_quantity > 0 and version >= 3))
                 and terminal_reason is not null
                 and btrim(terminal_reason) <> '')
+        ),
+    constraint trading_order_expiration_shape_check
+        check (
+            status <> 'EXPIRED'
+            or (time_in_force = 'DAY' and terminal_reason = 'DAY_SESSION_CLOSE')
+            or (time_in_force = 'GTD'
+                and terminal_reason = 'GTD_EXPIRY'
+                and last_transition_at >= expires_at)
         )
 );
 
@@ -134,6 +142,11 @@ create table trading.order_lifecycle_transition (
     constraint order_lifecycle_transition_receipt_match
         foreign key (command_id, order_id, version, to_status)
         references trading.order_lifecycle_command(command_id, order_id, resulting_version, result_status),
+    constraint order_lifecycle_transition_source_version_check
+        check (
+            (version = 1 and from_status is null)
+            or (version > 1 and from_status is not null)
+        ),
     constraint order_lifecycle_transition_initial_shape_check
         check (
             (version = 1
@@ -165,3 +178,44 @@ create table trading.order_lifecycle_transition (
                     or (from_status = 'PARTIALLY_FILLED' and cumulative_filled_quantity > 0)))
         )
 );
+
+create function trading.enforce_order_lifecycle_transition_expiration()
+returns trigger
+language plpgsql
+as $$
+declare
+    stored_time_in_force varchar(3);
+    stored_expires_at timestamptz;
+begin
+    if new.to_status <> 'EXPIRED' then
+        return new;
+    end if;
+
+    select time_in_force, expires_at
+    into stored_time_in_force, stored_expires_at
+    from trading.trading_order
+    where order_id = new.order_id;
+
+    if stored_time_in_force = 'DAY' then
+        if new.reason is distinct from 'DAY_SESSION_CLOSE' then
+            raise exception 'DAY expiration reason must be DAY_SESSION_CLOSE'
+                using errcode = '23514';
+        end if;
+    elsif stored_time_in_force = 'GTD' then
+        if new.reason is distinct from 'GTD_EXPIRY' or new.occurred_at < stored_expires_at then
+            raise exception 'GTD expiration must occur at or after expires_at with reason GTD_EXPIRY'
+                using errcode = '23514';
+        end if;
+    else
+        raise exception 'GTC orders cannot expire'
+            using errcode = '23514';
+    end if;
+
+    return new;
+end
+$$;
+
+create trigger enforce_order_lifecycle_transition_expiration
+before insert or update on trading.order_lifecycle_transition
+for each row
+execute function trading.enforce_order_lifecycle_transition_expiration();

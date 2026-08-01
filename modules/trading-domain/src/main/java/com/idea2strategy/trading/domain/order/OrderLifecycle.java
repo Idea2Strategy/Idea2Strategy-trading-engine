@@ -137,15 +137,44 @@ public record OrderLifecycle(
                 }
                 requireNoReason(terminalReason, status);
             }
-            case CANCELLED, EXPIRED -> {
-                boolean isDirectTerminal = cumulativeFilledQuantity.signum() == 0 && version == 2;
-                boolean followsPartialFill = cumulativeFilledQuantity.signum() > 0 && version >= 3;
-                if ((!isDirectTerminal && !followsPartialFill)
-                        || cumulativeFilledQuantity.compareTo(terms.quantity()) >= 0) {
-                    throw new IllegalArgumentException(status + " state is inconsistent");
-                }
+            case CANCELLED -> {
+                requireOpenTerminalShape(terms, status, cumulativeFilledQuantity, version);
                 nonBlank(terminalReason, "terminalReason");
             }
+            case EXPIRED -> {
+                requireOpenTerminalShape(terms, status, cumulativeFilledQuantity, version);
+                validateExpirationState(terms, lastTransitionAt, terminalReason);
+            }
+        }
+    }
+
+    private static void requireOpenTerminalShape(
+            OrderTerms terms, OrderStatus status, BigDecimal cumulativeFilledQuantity, long version) {
+        boolean isDirectTerminal = cumulativeFilledQuantity.signum() == 0 && version == 2;
+        boolean followsPartialFill = cumulativeFilledQuantity.signum() > 0 && version >= 3;
+        if ((!isDirectTerminal && !followsPartialFill)
+                || cumulativeFilledQuantity.compareTo(terms.quantity()) >= 0) {
+            throw new IllegalArgumentException(status + " state is inconsistent");
+        }
+    }
+
+    private static void validateExpirationState(
+            OrderTerms terms, Instant lastTransitionAt, String terminalReason) {
+        switch (terms.timeInForce()) {
+            case DAY -> requireExpirationReason(terminalReason, "DAY_SESSION_CLOSE");
+            case GTD -> {
+                requireExpirationReason(terminalReason, "GTD_EXPIRY");
+                if (lastTransitionAt.isBefore(terms.expiresAt())) {
+                    throw new IllegalArgumentException("GTD cannot be EXPIRED before expiresAt");
+                }
+            }
+            case GTC -> throw new IllegalArgumentException("GTC cannot be EXPIRED");
+        }
+    }
+
+    private static void requireExpirationReason(String actual, String expected) {
+        if (!expected.equals(actual)) {
+            throw new IllegalArgumentException("EXPIRED terminalReason must be " + expected);
         }
     }
 

@@ -48,6 +48,7 @@ public class PostgresOrderLifecycleStore implements OrderLifecycleStore {
     @Override
     public OrderLifecycle createOrLoad(OrderLifecycle desired) {
         Objects.requireNonNull(desired, "desired");
+        requireInitialCreationAggregate(desired);
         requireExactlyPersistable(desired);
         return transactionTemplate.execute(status -> createOrLoadInTransaction(desired));
     }
@@ -151,10 +152,24 @@ public class PostgresOrderLifecycleStore implements OrderLifecycleStore {
         }
 
         OrderLifecycle stored = loadByIntentId(desired.terms().intentId()).orElseThrow(PostgresOrderLifecycleStore::conflict);
-        if (!stored.equals(desired)) {
+        if (!hasSameCreation(stored, desired)) {
             throw conflict();
         }
         return stored;
+    }
+
+    private static boolean hasSameCreation(OrderLifecycle stored, OrderLifecycle desired) {
+        OrderStatus storedInitialStatus = stored.status() == OrderStatus.REJECTED
+                ? OrderStatus.REJECTED
+                : OrderStatus.ACCEPTED;
+        String storedInitialReason = storedInitialStatus == OrderStatus.REJECTED ? stored.terminalReason() : null;
+        return stored.orderId().equals(desired.orderId())
+                && stored.createCommandId().equals(desired.createCommandId())
+                && stored.requestFingerprint().equals(desired.requestFingerprint())
+                && stored.terms().equals(desired.terms())
+                && stored.createdAt().equals(desired.createdAt())
+                && storedInitialStatus == desired.status()
+                && Objects.equals(storedInitialReason, desired.terminalReason());
     }
 
     private int insertCreateReceipt(OrderLifecycle desired) {
@@ -369,6 +384,13 @@ public class PostgresOrderLifecycleStore implements OrderLifecycleStore {
         requireDatabaseInstant(lifecycle.terms().expiresAt(), "expiresAt");
         requireDatabaseInstant(lifecycle.createdAt(), "createdAt");
         requireDatabaseInstant(lifecycle.lastTransitionAt(), "lastTransitionAt");
+    }
+
+    private static void requireInitialCreationAggregate(OrderLifecycle desired) {
+        if (desired.version() != 1
+                || (desired.status() != OrderStatus.ACCEPTED && desired.status() != OrderStatus.REJECTED)) {
+            throw new IllegalArgumentException("createOrLoad requires an initial ACCEPTED or REJECTED aggregate");
+        }
     }
 
     private static void requireDatabaseDecimal(BigDecimal value, String name) {

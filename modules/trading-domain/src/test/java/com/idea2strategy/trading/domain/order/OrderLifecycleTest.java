@@ -166,6 +166,22 @@ class OrderLifecycleTest {
                 accepted, OrderStatus.EXPIRED, BigDecimal.ONE, 2, T1, "DAY_SESSION_CLOSE"));
     }
 
+    @Test
+    void rejectsReconstructedExpirationStatesImpossibleForTheirTimeInForce() {
+        OrderLifecycle day = accepted(dayTerms("5"));
+        OrderLifecycle gtc = accepted(gtcTerms("5"));
+        OrderLifecycle gtd = accepted(gtdTerms("5", T2));
+
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                gtc, OrderStatus.EXPIRED, BigDecimal.ZERO, 2, T1, "GTD_EXPIRY"));
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                gtd, OrderStatus.EXPIRED, BigDecimal.ZERO, 2, T1, "GTD_EXPIRY"));
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                gtd, OrderStatus.EXPIRED, BigDecimal.ZERO, 2, T2, "DAY_SESSION_CLOSE"));
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                day, OrderStatus.EXPIRED, BigDecimal.ZERO, 2, T1, "GTD_EXPIRY"));
+    }
+
     private static OrderTerms dayTerms(String quantity) {
         return terms(quantity, TimeInForce.DAY, null);
     }
