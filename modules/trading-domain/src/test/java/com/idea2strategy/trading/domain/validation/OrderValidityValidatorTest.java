@@ -123,6 +123,76 @@ class OrderValidityValidatorTest {
                 OrderValidityReason.RISK_LIMIT_EXCEEDED), result.reasons());
     }
 
+    @Test
+    void rejectsInstrumentQuantityBelowMinimum() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.009", "200.00", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(
+                OrderValidityReason.MINIMUM_QUANTITY_NOT_MET,
+                OrderValidityReason.MINIMUM_NOTIONAL_NOT_MET), result.reasons());
+    }
+
+    @Test
+    void rejectsInstrumentNotionalBelowMinimum() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.01", "999.99", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.MINIMUM_NOTIONAL_NOT_MET), result.reasons());
+    }
+
+    @Test
+    void rejectsInstrumentQuantityPrecisionBeyondNormalizedScale() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.01001", "1000.00", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.QUANTITY_PRECISION_EXCEEDED), result.reasons());
+    }
+
+    @Test
+    void rejectsInstrumentPricePrecisionBeyondNormalizedScale() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.10", "100.001", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.PRICE_PRECISION_EXCEEDED), result.reasons());
+    }
+
+    @Test
+    void acceptsInstrumentTrailingZerosWithinNormalizedScale() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.0100", "1000.00", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
+    }
+
+    @Test
+    void rejectsInstrumentWhenNumericPolicyIsUnavailable() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.01", "1000.00", null));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE), result.reasons());
+    }
+
+    @Test
+    void acceptsInstrumentAtExactMinimumQuantityAndNotional() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.01", "1000.00", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
+    }
+
+    @Test
+    void returnsMultipleInstrumentReasonsInEnumOrder() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.00001", "0.001", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(
+                OrderValidityReason.MINIMUM_QUANTITY_NOT_MET,
+                OrderValidityReason.MINIMUM_NOTIONAL_NOT_MET,
+                OrderValidityReason.QUANTITY_PRECISION_EXCEEDED,
+                OrderValidityReason.PRICE_PRECISION_EXCEEDED), result.reasons());
+    }
+
     private static OrderValidityRequest request(
             RiskDirection riskDirection,
             boolean riskEvaluationComplete,
@@ -142,6 +212,21 @@ class OrderValidityValidatorTest {
                 latestFundsSnapshot, riskDirection,
                 riskEvaluationComplete, riskEvaluations,
                 new InstrumentNumericPolicy("instrument-v1", new BigDecimal("100.00"), BigDecimal.ONE, 4, 2));
+    }
+
+    private static OrderValidityRequest instrumentRequest(
+            String quantity, String price, InstrumentNumericPolicy instrumentPolicy) {
+        BigDecimal quantityValue = new BigDecimal(quantity);
+        BigDecimal priceValue = new BigDecimal(price);
+        return new OrderValidityRequest(
+                UUID.fromString("10000000-0000-0000-0000-000000000001"), quantityValue,
+                priceValue, quantityValue.multiply(priceValue), "funds-v1", validFunds(),
+                RiskDirection.INCREASING, true, List.of(), instrumentPolicy);
+    }
+
+    private static InstrumentNumericPolicy instrumentPolicy() {
+        return new InstrumentNumericPolicy(
+                "instrument-v1", new BigDecimal("10"), new BigDecimal("0.01"), 4, 2);
     }
 
     private static AvailableFundsSnapshot validFunds() {
