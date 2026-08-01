@@ -88,7 +88,7 @@ public final class OrderValidityValidator {
 
     private static String instrumentPolicyVersion(OrderValidityRequest request) {
         InstrumentNumericPolicy policy = request.instrumentPolicy();
-        return policy == null ? OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE.name() : policy.version();
+        return policy == null ? null : policy.version();
     }
 
     private static OrderValidityStatus statusFor(EnumSet<OrderValidityReason> reasons) {

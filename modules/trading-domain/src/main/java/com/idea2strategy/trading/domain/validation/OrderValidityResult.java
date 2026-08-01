@@ -19,8 +19,10 @@ public record OrderValidityResult(
         OrderValidityInputValidation.requireStrictlySorted(reasons, Comparator.naturalOrder(), "reasons");
         fundsSnapshotVersion = OrderValidityInputValidation.requireNonBlank(
                 fundsSnapshotVersion, "fundsSnapshotVersion");
-        instrumentPolicyVersion = OrderValidityInputValidation.requireNonBlank(
-                instrumentPolicyVersion, "instrumentPolicyVersion");
+        if (instrumentPolicyVersion != null) {
+            instrumentPolicyVersion = OrderValidityInputValidation.requireNonBlank(
+                    instrumentPolicyVersion, "instrumentPolicyVersion");
+        }
         riskPolicyEvidence = OrderValidityInputValidation.immutableList(
                 riskPolicyEvidence, "riskPolicyEvidence");
         OrderValidityInputValidation.requireStrictlySorted(riskPolicyEvidence,

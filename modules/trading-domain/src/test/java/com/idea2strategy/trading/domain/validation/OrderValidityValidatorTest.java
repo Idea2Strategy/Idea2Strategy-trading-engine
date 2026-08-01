@@ -171,6 +171,15 @@ class OrderValidityValidatorTest {
 
         assertEquals(OrderValidityStatus.REJECTED, result.status());
         assertEquals(List.of(OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE), result.reasons());
+        assertEquals(null, result.instrumentPolicyVersion());
+    }
+
+    @Test
+    void preservesPresentInstrumentPolicyVersionThatMatchesUnavailableReasonCode() {
+        OrderValidityResult result = validator.validate(instrumentRequest(
+                "0.01", "1000.00", instrumentPolicy("INSTRUMENT_POLICY_UNAVAILABLE")));
+
+        assertEquals("INSTRUMENT_POLICY_UNAVAILABLE", result.instrumentPolicyVersion());
     }
 
     @Test
@@ -225,8 +234,11 @@ class OrderValidityValidatorTest {
     }
 
     private static InstrumentNumericPolicy instrumentPolicy() {
-        return new InstrumentNumericPolicy(
-                "instrument-v1", new BigDecimal("10"), new BigDecimal("0.01"), 4, 2);
+        return instrumentPolicy("instrument-v1");
+    }
+
+    private static InstrumentNumericPolicy instrumentPolicy(String version) {
+        return new InstrumentNumericPolicy(version, new BigDecimal("10"), new BigDecimal("0.01"), 4, 2);
     }
 
     private static AvailableFundsSnapshot validFunds() {

@@ -138,6 +138,18 @@ class OrderValidityModelTest {
     }
 
     @Test
+    void permitsAbsentInstrumentPolicyVersionButRejectsBlankPresentVersion() {
+        assertAll(
+                () -> assertEquals(null, new OrderValidityResult(
+                        proposalId(), OrderValidityStatus.REJECTED,
+                        List.of(OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE), "funds-v1", null, List.of())
+                        .instrumentPolicyVersion()),
+                () -> assertThrows(IllegalArgumentException.class, () -> new OrderValidityResult(
+                        proposalId(), OrderValidityStatus.REJECTED,
+                        List.of(OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE), "funds-v1", " ", List.of())));
+    }
+
+    @Test
     void rejectsUnsortedOrDuplicatedRiskPolicyEvidence() {
         RiskPolicyEvidence concentration = new RiskPolicyEvidence("concentration", "risk-v1");
         RiskPolicyEvidence gross = new RiskPolicyEvidence("gross-exposure", "risk-v1");
