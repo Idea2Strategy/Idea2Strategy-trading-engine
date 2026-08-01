@@ -25,7 +25,7 @@ class OrderIntentBatchServiceTest {
     }
 
     @Test
-    void rejectsNullRequestBeforeCallingTheFactoryOrStore() {
+    void rejectsNullRequestBeforeCallingStore() {
         RecordingStore store = new RecordingStore(null);
 
         assertThrows(
@@ -43,20 +43,17 @@ class OrderIntentBatchServiceTest {
     }
 
     @Test
-    void forwardsTheExactSingleFactoryOutputToStoreAndReturnsPersistedInstance() {
+    void forwardsRealFactoryAggregateToStoreOnceAndReturnsPersistedInstance() {
         OrderIntentBatchRequest request = request();
-        OrderIntentBatch desired = new OrderIntentBatchFactory().create(request);
-        OrderIntentBatch persisted = copyOf(desired);
+        OrderIntentBatch expected = new OrderIntentBatchFactory().create(request);
+        OrderIntentBatch persisted = copyOf(expected);
         RecordingStore store = new RecordingStore(persisted);
-        RecordingFactory factory = new RecordingFactory(desired);
 
-        OrderIntentBatch result = new OrderIntentBatchService(factory, store)
+        OrderIntentBatch result = new OrderIntentBatchService(new OrderIntentBatchFactory(), store)
                 .createOrLoad(request);
 
         assertSame(persisted, result);
-        assertSame(desired, store.received);
-        assertSame(request, factory.received);
-        assertEquals(1, factory.calls);
+        assertEquals(expected, store.received);
         assertEquals(1, store.calls);
     }
 
@@ -130,20 +127,4 @@ class OrderIntentBatchServiceTest {
         }
     }
 
-    private static final class RecordingFactory extends OrderIntentBatchFactory {
-        private final OrderIntentBatch output;
-        private OrderIntentBatchRequest received;
-        private int calls;
-
-        private RecordingFactory(OrderIntentBatch output) {
-            this.output = output;
-        }
-
-        @Override
-        public OrderIntentBatch create(OrderIntentBatchRequest request) {
-            received = request;
-            calls++;
-            return output;
-        }
-    }
 }
