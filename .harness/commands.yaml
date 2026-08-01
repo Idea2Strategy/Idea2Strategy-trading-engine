@@ -1,8 +1,11 @@
 schema_version: 1
 workspace_id: workspace.trading-engine
 commands:
+  - id: command.test-suite
+    kind: test
+    argv: [./gradlew.bat, test]
+    timeout_seconds: 120
   - id: command.develop-integration
     kind: integration
     argv: [git, merge-base, --is-ancestor, HEAD, origin/develop]
     timeout_seconds: 30
-
