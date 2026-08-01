@@ -1,0 +1,313 @@
+package com.idea2strategy.trading.domain.validation;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+
+class OrderValidityValidatorTest {
+
+    private final OrderValidityValidator validator = new OrderValidityValidator();
+
+    @Test
+    void blocksRiskIncreaseButAllowsRiskReductionAboveLimit() {
+        OrderValidityResult increasing = validator.validate(request(
+                RiskDirection.INCREASING, true, List.of(metric("gross-exposure", "risk-v1", "120", "130", "100"))));
+        OrderValidityResult reducing = validator.validate(request(
+                RiskDirection.REDUCING, true, List.of(metric("gross-exposure", "risk-v1", "120", "110", "100"))));
+
+        assertEquals(OrderValidityStatus.REJECTED, increasing.status());
+        assertEquals(List.of(OrderValidityReason.RISK_LIMIT_EXCEEDED), increasing.reasons());
+        assertEquals(OrderValidityStatus.ACCEPTED, reducing.status());
+        assertTrue(reducing.reasons().isEmpty());
+    }
+
+    @Test
+    void requiresReevaluationWhenLatestFundsAreUnavailable() {
+        OrderValidityResult result = validator.validate(request(
+                "funds-v1", null, RiskDirection.INCREASING, true, List.of()));
+
+        assertEquals(OrderValidityStatus.REEVALUATION_REQUIRED, result.status());
+        assertEquals(List.of(OrderValidityReason.AVAILABLE_FUNDS_UNAVAILABLE), result.reasons());
+        assertEquals("funds-v1", result.fundsSnapshotVersion());
+    }
+
+    @Test
+    void requiresReevaluationWhenLatestFundsSnapshotChangesWithoutChangingProposal() {
+        OrderValidityRequest request = request(
+                "funds-v1", new AvailableFundsSnapshot("funds-v2", new BigDecimal("1000.00")),
+                RiskDirection.INCREASING, true, List.of());
+
+        OrderValidityResult result = validator.validate(request);
+
+        assertEquals(OrderValidityStatus.REEVALUATION_REQUIRED, result.status());
+        assertEquals(List.of(OrderValidityReason.AVAILABLE_FUNDS_SNAPSHOT_CHANGED), result.reasons());
+        assertEquals("funds-v2", result.fundsSnapshotVersion());
+        assertEquals(new BigDecimal("10"), request.quantity());
+        assertEquals(new BigDecimal("255.00"), request.totalRequiredCash());
+    }
+
+    @Test
+    void requiresReevaluationWhenMatchingFundsAreInsufficient() {
+        OrderValidityResult result = validator.validate(request(
+                "funds-v1", new AvailableFundsSnapshot("funds-v1", new BigDecimal("254.99")),
+                RiskDirection.INCREASING, true, List.of()));
+
+        assertEquals(OrderValidityStatus.REEVALUATION_REQUIRED, result.status());
+        assertEquals(List.of(OrderValidityReason.INSUFFICIENT_AVAILABLE_FUNDS), result.reasons());
+    }
+
+    @Test
+    void acceptsWhenRequiredCashExactlyMatchesAvailableCash() {
+        OrderValidityResult result = validator.validate(request(
+                "funds-v1", new AvailableFundsSnapshot("funds-v1", new BigDecimal("255.00")),
+                RiskDirection.INCREASING, true, List.of()));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
+    }
+
+    @Test
+    void rejectsIncompleteRiskEvaluationWhilePreservingObservedEvidence() {
+        OrderValidityResult result = validator.validate(request(
+                "funds-v1", validFunds(), RiskDirection.INCREASING, false,
+                List.of(metric("gross-exposure", "risk-v1", "90", "95", "100"))));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.RISK_EVALUATION_UNAVAILABLE), result.reasons());
+        assertEquals(List.of(new RiskPolicyEvidence("gross-exposure", "risk-v1")), result.riskPolicyEvidence());
+    }
+
+    @Test
+    void rejectsWhenAnyIndependentRiskMetricExceedsItsOwnMaximum() {
+        OrderValidityResult result = validator.validate(request(
+                "funds-v1", validFunds(), RiskDirection.INCREASING, true,
+                List.of(
+                        metric("gross-exposure", "risk-v1", "90", "95", "100"),
+                        metric("concentration", "risk-v2", "40", "51", "50"))));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.RISK_LIMIT_EXCEEDED), result.reasons());
+    }
+
+    @Test
+    void rejectsReducingProposalWhenAnyMetricIncreases() {
+        OrderValidityResult result = validator.validate(request(
+                "funds-v1", validFunds(), RiskDirection.REDUCING, true,
+                List.of(
+                        metric("gross-exposure", "risk-v1", "120", "110", "100"),
+                        metric("concentration", "risk-v2", "40", "41", "50"))));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.RISK_REDUCTION_NOT_CONFIRMED), result.reasons());
+    }
+
+    @Test
+    void acceptsIncreasingRiskExactlyAtMaximum() {
+        OrderValidityResult result = validator.validate(request(
+                RiskDirection.INCREASING, true,
+                List.of(metric("gross-exposure", "risk-v1", "90", "100", "100"))));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
+    }
+
+    @Test
+    void acceptsReducingRiskExactlyAtCurrentValue() {
+        OrderValidityResult result = validator.validate(request(
+                RiskDirection.REDUCING, true,
+                List.of(metric("gross-exposure", "risk-v1", "120", "120", "100"))));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
+    }
+
+    @Test
+    void returnsEqualResultWithSortedEvidenceWhenRiskEvaluationOrderChanges() {
+        RiskMetricEvaluation concentration = metric("concentration", "risk-v2", "40", "45", "50");
+        RiskMetricEvaluation gross = metric("gross-exposure", "risk-v1", "90", "95", "100");
+
+        OrderValidityResult first = validator.validate(request(
+                "funds-v1", validFunds(), RiskDirection.INCREASING, true, List.of(concentration, gross)));
+        OrderValidityResult second = validator.validate(request(
+                "funds-v1", validFunds(), RiskDirection.INCREASING, true, List.of(gross, concentration)));
+
+        assertEquals(first, second);
+        assertEquals(List.of(
+                new RiskPolicyEvidence("concentration", "risk-v2"),
+                new RiskPolicyEvidence("gross-exposure", "risk-v1")), first.riskPolicyEvidence());
+    }
+
+    @Test
+    void givesRiskRejectionPrecedenceOverFundsReevaluationWhilePreservingBothReasons() {
+        OrderValidityResult result = validator.validate(request(
+                "funds-v1", null, RiskDirection.INCREASING, true,
+                List.of(metric("gross-exposure", "risk-v1", "120", "130", "100"))));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(
+                OrderValidityReason.AVAILABLE_FUNDS_UNAVAILABLE,
+                OrderValidityReason.RISK_LIMIT_EXCEEDED), result.reasons());
+    }
+
+    @Test
+    void rejectsInstrumentQuantityBelowMinimum() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.009", "200.00", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(
+                OrderValidityReason.MINIMUM_QUANTITY_NOT_MET,
+                OrderValidityReason.MINIMUM_NOTIONAL_NOT_MET), result.reasons());
+    }
+
+    @Test
+    void rejectsInstrumentNotionalBelowMinimum() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.01", "999.99", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.MINIMUM_NOTIONAL_NOT_MET), result.reasons());
+    }
+
+    @Test
+    void rejectsInstrumentQuantityPrecisionBeyondNormalizedScale() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.01001", "1000.00", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.QUANTITY_PRECISION_EXCEEDED), result.reasons());
+    }
+
+    @Test
+    void rejectsInstrumentPricePrecisionBeyondNormalizedScale() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.10", "100.001", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.PRICE_PRECISION_EXCEEDED), result.reasons());
+    }
+
+    @Test
+    void acceptsInstrumentTrailingZerosWithinNormalizedScale() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.0100", "1000.00", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
+    }
+
+    @Test
+    void rejectsInstrumentWhenNumericPolicyIsUnavailable() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.01", "1000.00", null));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(OrderValidityReason.INSTRUMENT_POLICY_UNAVAILABLE), result.reasons());
+        assertEquals(null, result.instrumentPolicyVersion());
+    }
+
+    @Test
+    void preservesPresentInstrumentPolicyVersionThatMatchesUnavailableReasonCode() {
+        OrderValidityResult result = validator.validate(instrumentRequest(
+                "0.01", "1000.00", instrumentPolicy("INSTRUMENT_POLICY_UNAVAILABLE")));
+
+        assertEquals("INSTRUMENT_POLICY_UNAVAILABLE", result.instrumentPolicyVersion());
+    }
+
+    @Test
+    void acceptsInstrumentAtExactMinimumQuantityAndNotional() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.01", "1000.00", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, result.status());
+        assertTrue(result.reasons().isEmpty());
+    }
+
+    @Test
+    void returnsMultipleInstrumentReasonsInEnumOrder() {
+        OrderValidityResult result = validator.validate(instrumentRequest("0.00001", "0.001", instrumentPolicy()));
+
+        assertEquals(OrderValidityStatus.REJECTED, result.status());
+        assertEquals(List.of(
+                OrderValidityReason.MINIMUM_QUANTITY_NOT_MET,
+                OrderValidityReason.MINIMUM_NOTIONAL_NOT_MET,
+                OrderValidityReason.QUANTITY_PRECISION_EXCEEDED,
+                OrderValidityReason.PRICE_PRECISION_EXCEEDED), result.reasons());
+    }
+
+    @Test
+    void validatesSupportedExponentBoundaryDecimalsWithoutArithmeticFailure() {
+        BigDecimal smallestPositiveScale = new BigDecimal(BigInteger.ONE, Integer.MAX_VALUE);
+        BigDecimal largestTrailingZeroScale = new BigDecimal(BigInteger.TEN, Integer.MIN_VALUE + 1);
+
+        OrderValidityResult smallest = validator.validate(exponentBoundaryRequest(
+                smallestPositiveScale, Integer.MAX_VALUE));
+        OrderValidityResult largest = validator.validate(exponentBoundaryRequest(
+                largestTrailingZeroScale, 0));
+
+        assertEquals(OrderValidityStatus.ACCEPTED, smallest.status());
+        assertTrue(smallest.reasons().isEmpty());
+        assertEquals(OrderValidityStatus.ACCEPTED, largest.status());
+        assertTrue(largest.reasons().isEmpty());
+    }
+
+    private static OrderValidityRequest request(
+            RiskDirection riskDirection,
+            boolean riskEvaluationComplete,
+            List<RiskMetricEvaluation> riskEvaluations) {
+        return request("funds-v1", validFunds(), riskDirection, riskEvaluationComplete, riskEvaluations);
+    }
+
+    private static OrderValidityRequest request(
+            String allocationFundsSnapshotVersion,
+            AvailableFundsSnapshot latestFundsSnapshot,
+            RiskDirection riskDirection,
+            boolean riskEvaluationComplete,
+            List<RiskMetricEvaluation> riskEvaluations) {
+        return new OrderValidityRequest(
+                UUID.fromString("10000000-0000-0000-0000-000000000001"), new BigDecimal("10"),
+                new BigDecimal("25.50"), new BigDecimal("255.00"), allocationFundsSnapshotVersion,
+                latestFundsSnapshot, riskDirection,
+                riskEvaluationComplete, riskEvaluations,
+                new InstrumentNumericPolicy("instrument-v1", new BigDecimal("100.00"), BigDecimal.ONE, 4, 2));
+    }
+
+    private static OrderValidityRequest instrumentRequest(
+            String quantity, String price, InstrumentNumericPolicy instrumentPolicy) {
+        BigDecimal quantityValue = new BigDecimal(quantity);
+        BigDecimal priceValue = new BigDecimal(price);
+        return new OrderValidityRequest(
+                UUID.fromString("10000000-0000-0000-0000-000000000001"), quantityValue,
+                priceValue, quantityValue.multiply(priceValue), "funds-v1", validFunds(),
+                RiskDirection.INCREASING, true, List.of(), instrumentPolicy);
+    }
+
+    private static OrderValidityRequest exponentBoundaryRequest(BigDecimal quantity, int maximumQuantityScale) {
+        return new OrderValidityRequest(
+                UUID.fromString("10000000-0000-0000-0000-000000000001"), quantity,
+                BigDecimal.ONE, quantity, "funds-v1", new AvailableFundsSnapshot("funds-v1", quantity),
+                RiskDirection.INCREASING, true, List.of(),
+                new InstrumentNumericPolicy(
+                        "instrument-v1", BigDecimal.ZERO, BigDecimal.ZERO, maximumQuantityScale, 0));
+    }
+
+    private static InstrumentNumericPolicy instrumentPolicy() {
+        return instrumentPolicy("instrument-v1");
+    }
+
+    private static InstrumentNumericPolicy instrumentPolicy(String version) {
+        return new InstrumentNumericPolicy(version, new BigDecimal("10"), new BigDecimal("0.01"), 4, 2);
+    }
+
+    private static AvailableFundsSnapshot validFunds() {
+        return new AvailableFundsSnapshot("funds-v1", new BigDecimal("1000.00"));
+    }
+
+    private static RiskMetricEvaluation metric(
+            String metricCode,
+            String policyVersion,
+            String currentValue,
+            String projectedValue,
+            String maximumAllowedValue) {
+        return new RiskMetricEvaluation(metricCode, policyVersion, new BigDecimal(currentValue),
+                new BigDecimal(projectedValue), new BigDecimal(maximumAllowedValue));
+    }
+}
