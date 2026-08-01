@@ -1,0 +1,149 @@
+package com.idea2strategy.trading.market.redis;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.idea2strategy.trading.market.alpaca.AlpacaMarketEventNormalizer;
+import com.idea2strategy.trading.market.alpaca.AlpacaMarketInput;
+import com.idea2strategy.trading.market.alpaca.MarketEventHandlingResult;
+import com.idea2strategy.trading.market.alpaca.MarketEventOrderingProcessor;
+import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
+import com.idea2strategy.trading.messaging.market.MarketEventType;
+import io.lettuce.core.Consumer;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisCommandExecutionException;
+import io.lettuce.core.XGroupCreateArgs;
+import io.lettuce.core.XReadArgs;
+import io.lettuce.core.XReadArgs.StreamOffset;
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
+
+@Testcontainers(disabledWithoutDocker = true)
+@SuppressWarnings("unchecked")
+class RedisMarketEventPublisherTest {
+    private static final UUID AAPL_ID = UUID.fromString("8a35e6b5-cf84-4f63-920d-57c1f1b95df0");
+    private static final AlpacaMarketEventNormalizer NORMALIZER =
+            new AlpacaMarketEventNormalizer(Map.of("AAPL", AAPL_ID));
+
+    @Container
+    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine"))
+            .withExposedPorts(6379);
+
+    @Test
+    void publishesOnceAndAdvancesLatestObservationAtomically() {
+        String prefix = prefix();
+        try (RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(redisUri(), prefix)) {
+            MarketEventEnvelope event = event("quote-42", 42, 0, "210.12");
+            MarketEventHandlingResult accepted = new MarketEventOrderingProcessor().process(event);
+
+            MarketEventPublishResult first = publisher.publish(accepted);
+            MarketEventPublishResult duplicateAfterRestart =
+                    publisher.publish(new MarketEventOrderingProcessor().process(event));
+
+            assertEquals(MarketEventPublishStatus.PUBLISHED, first.status());
+            assertTrue(first.latestUpdated());
+            assertEquals(MarketEventPublishStatus.DUPLICATE, duplicateAfterRestart.status());
+            assertEquals(1, publisher.streamLength());
+            assertEquals(event, publisher.findLatest(AAPL_ID, MarketEventType.QUOTE).orElseThrow());
+        }
+    }
+
+    @Test
+    void publishesHistoricalCorrectionWithoutMovingLatestObservationBackward() {
+        String prefix = prefix();
+        MarketEventOrderingProcessor ordering = new MarketEventOrderingProcessor();
+        try (RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(redisUri(), prefix)) {
+            publisher.publish(ordering.process(event("quote-41", 41, 0, "210.10")));
+            MarketEventEnvelope latest = event("quote-42", 42, 0, "210.12");
+            publisher.publish(ordering.process(latest));
+
+            MarketEventPublishResult correction =
+                    publisher.publish(ordering.process(event("quote-41", 41, 1, "210.11")));
+
+            assertEquals(MarketEventPublishStatus.PUBLISHED, correction.status());
+            assertFalse(correction.latestUpdated());
+            assertEquals(3, publisher.streamLength());
+            assertEquals(latest, publisher.findLatest(AAPL_ID, MarketEventType.QUOTE).orElseThrow());
+        }
+    }
+
+    @Test
+    void rejectsWrongTypeBeforeWritingAnyPartOfTheOperation() {
+        String prefix = prefix();
+        MarketEventEnvelope event = event("quote-42", 42, 0, "210.12");
+        try (RedisClient client = RedisClient.create(redisUri());
+                var connection = client.connect();
+                RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(redisUri(), prefix)) {
+            connection.sync().set(publisher.latestKey(AAPL_ID, MarketEventType.QUOTE), "wrong-type");
+
+            assertThrows(
+                    RedisCommandExecutionException.class,
+                    () -> publisher.publish(new MarketEventOrderingProcessor().process(event)));
+            assertEquals(0, publisher.streamLength());
+            assertEquals(0, connection.sync().scard(publisher.deduplicationKey()));
+        }
+    }
+
+    @Test
+    void measuresConsumerGroupEntryAndObservationLag() {
+        String prefix = prefix();
+        try (RedisClient client = RedisClient.create(redisUri());
+                var connection = client.connect();
+                RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(redisUri(), prefix)) {
+            MarketEventOrderingProcessor ordering = new MarketEventOrderingProcessor();
+            publisher.publish(ordering.process(event("quote-41", 41, 0, "210.10")));
+            connection.sync().xgroupCreate(
+                    StreamOffset.from(publisher.streamKey(), "0-0"),
+                    "trading-workers",
+                    XGroupCreateArgs.Builder.mkstream());
+            publisher.publish(ordering.process(event("quote-42", 42, 0, "210.12")));
+            publisher.publish(ordering.process(event("quote-43", 43, 0, "210.13")));
+            connection.sync().xreadgroup(
+                    Consumer.from("trading-workers", "worker-1"),
+                    XReadArgs.Builder.count(1),
+                    StreamOffset.lastConsumed(publisher.streamKey()));
+
+            ConsumerLagMeasurement lag = publisher.measureConsumerLag("trading-workers");
+
+            assertEquals(2, lag.entryLag());
+            assertEquals(Duration.ofSeconds(2), lag.observationTimeLag());
+            assertFalse(lag.lastDeliveredStreamId().isBlank());
+        }
+    }
+
+    private static String redisUri() {
+        return "redis://" + REDIS.getHost() + ":" + REDIS.getMappedPort(6379);
+    }
+
+    private static String prefix() {
+        return "test:" + UUID.randomUUID();
+    }
+
+    private static MarketEventEnvelope event(
+            String providerEventId,
+            long sequence,
+            int revision,
+            String price) {
+        Instant occurredAt = Instant.parse("2026-08-01T14:30:00Z").plusSeconds(sequence);
+        return NORMALIZER.normalize(new AlpacaMarketInput(
+                MarketEventType.QUOTE,
+                providerEventId,
+                "AAPL",
+                "sip",
+                occurredAt,
+                occurredAt.plusMillis(10),
+                sequence,
+                revision,
+                Map.of("price", new BigDecimal(price))));
+    }
+}
