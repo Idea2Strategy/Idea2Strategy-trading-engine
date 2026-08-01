@@ -173,6 +173,124 @@ class OrderedJudgmentJournalTest {
         assertEquals(reductionFact, journal.snapshot(BOT_ID).entries().get(1).evidence());
     }
 
+    @Test
+    void restoresAValidatedSnapshotAndContinuesAtTheNextSequence() {
+        OrderedJudgmentJournal original = new OrderedJudgmentJournal();
+        original.append(BOT_ID, 0, event(
+                "60000000-0000-4000-8000-000000000001",
+                JudgmentEventType.CONDITION_SATISFIED,
+                subject("buy-flow", INSTRUMENT_A, null),
+                Map.of("stepId", "price-above-average")));
+        original.append(BOT_ID, 1, runtimeChange(
+                "60000000-0000-4000-8000-000000000002",
+                0,
+                1,
+                Map.of("status", "RUNNING")));
+
+        OrderedJudgmentJournal restored = new OrderedJudgmentJournal();
+        restored.restore(original.snapshot(BOT_ID));
+        JudgmentEntry continued = restored.append(BOT_ID, 2, event(
+                "60000000-0000-4000-8000-000000000003",
+                JudgmentEventType.CANDIDATE_CREATED,
+                subject("buy-flow", INSTRUMENT_A, CANDIDATE_ID),
+                Map.of("side", "BUY")));
+
+        assertEquals(3, continued.sequence());
+        assertEquals(original.snapshot(BOT_ID).entries(), restored.snapshot(BOT_ID).entries().subList(0, 2));
+        assertEquals(1, restored.snapshot(BOT_ID).runtimeState().revision());
+    }
+
+    @Test
+    void rejectsACorruptSnapshotAtomically() {
+        OrderedJudgmentJournal restored = new OrderedJudgmentJournal();
+        JudgmentEntry gap = new JudgmentEntry(
+                UUID.fromString("70000000-0000-4000-8000-000000000001"),
+                2,
+                JudgmentEventType.CONDITION_SATISFIED,
+                subject("buy-flow", INSTRUMENT_A, null),
+                Map.of("stepId", "price-above-average"),
+                Optional.empty());
+        BotJudgmentSnapshot corrupt = new BotJudgmentSnapshot(
+                BOT_ID, 1, List.of(gap), new ProjectedRuntimeState(0, Map.of()));
+
+        JudgmentAppendException failure = assertThrows(
+                JudgmentAppendException.class,
+                () -> restored.restore(corrupt));
+
+        assertEquals(JudgmentAppendFailure.SNAPSHOT_INVALID, failure.failure());
+        assertEquals(new BotJudgmentSnapshot(
+                BOT_ID, 0, List.of(), new ProjectedRuntimeState(0, Map.of())), restored.snapshot(BOT_ID));
+    }
+
+    @Test
+    void rejectsDuplicatedEvidenceAndAnInconsistentProjectionDuringRestore() {
+        JudgmentEntry firstFailure = entry(
+                "71000000-0000-4000-8000-000000000001",
+                1,
+                JudgmentEventType.FIRST_CONDITION_FAILED,
+                subject("buy-flow", INSTRUMENT_A, null));
+        JudgmentEntry duplicateIdentity = entry(
+                "71000000-0000-4000-8000-000000000001",
+                2,
+                JudgmentEventType.CONDITION_SATISFIED,
+                subject("buy-flow", INSTRUMENT_B, null));
+        JudgmentEntry duplicateFirstFailure = entry(
+                "71000000-0000-4000-8000-000000000002",
+                2,
+                JudgmentEventType.FIRST_CONDITION_FAILED,
+                subject("buy-flow", INSTRUMENT_A, null));
+
+        assertInvalidSnapshot(new BotJudgmentSnapshot(
+                BOT_ID, 2, List.of(firstFailure, duplicateIdentity), new ProjectedRuntimeState(0, Map.of())));
+        assertInvalidSnapshot(new BotJudgmentSnapshot(
+                BOT_ID, 2, List.of(firstFailure, duplicateFirstFailure), new ProjectedRuntimeState(0, Map.of())));
+        assertInvalidSnapshot(new BotJudgmentSnapshot(
+                BOT_ID,
+                1,
+                List.of(entry(
+                        "71000000-0000-4000-8000-000000000003",
+                        1,
+                        JudgmentEventType.CONDITION_SATISFIED,
+                        subject("buy-flow", INSTRUMENT_A, null))),
+                new ProjectedRuntimeState(1, Map.of("status", "RUNNING"))));
+    }
+
+    @Test
+    void neverOverwritesAnExistingJournalDuringRestore() {
+        OrderedJudgmentJournal target = new OrderedJudgmentJournal();
+        target.append(BOT_ID, 0, event(
+                "72000000-0000-4000-8000-000000000001",
+                JudgmentEventType.CONDITION_SATISFIED,
+                subject("buy-flow", INSTRUMENT_A, null),
+                Map.of("source", "live")));
+        BotJudgmentSnapshot before = target.snapshot(BOT_ID);
+
+        JudgmentAppendException failure = assertThrows(
+                JudgmentAppendException.class,
+                () -> target.restore(new BotJudgmentSnapshot(
+                        BOT_ID, 0, List.of(), new ProjectedRuntimeState(0, Map.of()))));
+
+        assertEquals(JudgmentAppendFailure.RESTORE_TARGET_NOT_EMPTY, failure.failure());
+        assertEquals(before, target.snapshot(BOT_ID));
+    }
+
+    private static void assertInvalidSnapshot(BotJudgmentSnapshot snapshot) {
+        OrderedJudgmentJournal target = new OrderedJudgmentJournal();
+        JudgmentAppendException failure = assertThrows(
+                JudgmentAppendException.class, () -> target.restore(snapshot));
+        assertEquals(JudgmentAppendFailure.SNAPSHOT_INVALID, failure.failure());
+        assertEquals(0, target.snapshot(BOT_ID).lastSequence());
+    }
+
+    private static JudgmentEntry entry(
+            String eventId,
+            long sequence,
+            JudgmentEventType type,
+            JudgmentSubject subject) {
+        return new JudgmentEntry(
+                UUID.fromString(eventId), sequence, type, subject, Map.of("source", "snapshot"), Optional.empty());
+    }
+
     private static JudgmentEventDraft event(
             String eventId,
             JudgmentEventType type,
