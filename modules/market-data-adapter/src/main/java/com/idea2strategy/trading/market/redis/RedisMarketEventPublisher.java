@@ -24,7 +24,7 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
 
     private static final String PUBLISH_SCRIPT = """
             local function assert_type(key, expected)
-              local actual = redis.call('TYPE', key)
+              local actual = redis.call('TYPE', key).ok
               if actual ~= 'none' and actual ~= expected then
                 return redis.error_reply('WRONGTYPE key ' .. key .. ' must be ' .. expected)
               end
