@@ -26,7 +26,7 @@
 ### Task 1: Pure order definition, deterministic identity, and lifecycle aggregate
 
 **Files:**
-- Delete: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/order/Order.java`
+- Preserve: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/order/Order.java` as the F01 compatibility order used by existing candidate execution ports; F05 adds `OrderLifecycle` alongside it.
 - Create: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/order/OrderSide.java`
 - Create: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/order/OrderType.java`
 - Create: `modules/trading-domain/src/main/java/com/idea2strategy/trading/domain/order/TimeInForce.java`
