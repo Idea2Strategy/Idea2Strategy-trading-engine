@@ -16,6 +16,42 @@ class BasicBudgetModelTest {
     }
 
     @Test
+    void rejectsCostPolicyRatesOutsideZeroToOne() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new ExpectedCostPolicy("virtual-fill-cost-v1", new BigDecimal("-0.01"), BigDecimal.ZERO));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ExpectedCostPolicy("virtual-fill-cost-v1", BigDecimal.ZERO, new BigDecimal("-0.01")));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ExpectedCostPolicy("virtual-fill-cost-v1", new BigDecimal("1.01"), BigDecimal.ZERO));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ExpectedCostPolicy("virtual-fill-cost-v1", BigDecimal.ZERO, new BigDecimal("1.01")));
+    }
+
+    @Test
+    void rejectsBlankCostPolicyVersion() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new ExpectedCostPolicy(" ", BigDecimal.ZERO, BigDecimal.ZERO));
+    }
+
+    @Test
+    void rejectsNegativeCashPositionValueAndReservation() {
+        assertThrows(IllegalArgumentException.class, () -> new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), new BigDecimal("-1"), BigDecimal.ZERO,
+                new ExpectedCostPolicy("virtual-fill-cost-v1", BigDecimal.ZERO, BigDecimal.ZERO), List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), BigDecimal.ZERO, new BigDecimal("-1"),
+                new ExpectedCostPolicy("virtual-fill-cost-v1", BigDecimal.ZERO, BigDecimal.ZERO), List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new BasicStrategyBudgetRequest(
+                UUID.fromString("20000000-0000-0000-0000-000000000002"), new BigDecimal("0.50"),
+                new BigDecimal("-1"), BigDecimal.ZERO, true,
+                BasicSizingPolicy.fixedAmount(new BigDecimal("1000")), List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new BasicStrategyBudgetRequest(
+                UUID.fromString("20000000-0000-0000-0000-000000000002"), new BigDecimal("0.50"),
+                BigDecimal.ZERO, new BigDecimal("-1"), true,
+                BasicSizingPolicy.fixedAmount(new BigDecimal("1000")), List.of()));
+    }
+
+    @Test
     void rejectsDuplicateCandidateIdsWithinAStrategy() {
         UUID duplicate = UUID.fromString("10000000-0000-0000-0000-000000000001");
         assertThrows(IllegalArgumentException.class, () -> new BasicStrategyBudgetRequest(
