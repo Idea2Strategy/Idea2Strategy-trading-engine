@@ -3,7 +3,6 @@ package com.idea2strategy.trading.domain.order;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 public record OrderLifecycle(
         UUID orderId,
@@ -17,15 +16,10 @@ public record OrderLifecycle(
         Instant lastTransitionAt,
         String terminalReason) {
 
-    private static final Pattern FINGERPRINT = Pattern.compile("[0-9a-f]{64}");
-
     public OrderLifecycle {
-        orderId = version5(orderId, "orderId");
-        createCommandId = version5(createCommandId, "createCommandId");
+        orderId = required(orderId, "orderId");
+        createCommandId = required(createCommandId, "createCommandId");
         requestFingerprint = required(requestFingerprint, "requestFingerprint");
-        if (!FINGERPRINT.matcher(requestFingerprint).matches()) {
-            throw new IllegalArgumentException("requestFingerprint must be lowercase SHA-256 hex");
-        }
         terms = required(terms, "terms");
         status = required(status, "status");
         cumulativeFilledQuantity = nonNegative(cumulativeFilledQuantity, "cumulativeFilledQuantity");
@@ -40,7 +34,11 @@ public record OrderLifecycle(
         if (lastTransitionAt.isBefore(createdAt)) {
             throw new IllegalArgumentException("lastTransitionAt must not precede createdAt");
         }
-        validateState(terms, status, cumulativeFilledQuantity, version, terminalReason);
+        if (terms.timeInForce() == TimeInForce.GTD && !terms.expiresAt().isAfter(createdAt)) {
+            throw new IllegalArgumentException("GTD expiresAt must be after createdAt");
+        }
+        validateState(terms, status, cumulativeFilledQuantity, version, createdAt, lastTransitionAt, terminalReason);
+        validateIdentity(orderId, createCommandId, requestFingerprint, terms, status, createdAt, terminalReason);
     }
 
     public OrderLifecycle applyFill(BigDecimal delta, Instant occurredAt) {
@@ -110,14 +108,20 @@ public record OrderLifecycle(
     }
 
     private static void validateState(
-            OrderTerms terms, OrderStatus status, BigDecimal cumulativeFilledQuantity, long version, String terminalReason) {
+            OrderTerms terms,
+            OrderStatus status,
+            BigDecimal cumulativeFilledQuantity,
+            long version,
+            Instant createdAt,
+            Instant lastTransitionAt,
+            String terminalReason) {
         switch (status) {
             case ACCEPTED -> {
-                requireInitial(version, cumulativeFilledQuantity, status);
+                requireInitial(version, cumulativeFilledQuantity, createdAt, lastTransitionAt, status);
                 requireNoReason(terminalReason, status);
             }
             case REJECTED -> {
-                requireInitial(version, cumulativeFilledQuantity, status);
+                requireInitial(version, cumulativeFilledQuantity, createdAt, lastTransitionAt, status);
                 nonBlank(terminalReason, "terminalReason");
             }
             case PARTIALLY_FILLED -> {
@@ -134,7 +138,10 @@ public record OrderLifecycle(
                 requireNoReason(terminalReason, status);
             }
             case CANCELLED, EXPIRED -> {
-                if (version < 2 || cumulativeFilledQuantity.compareTo(terms.quantity()) >= 0) {
+                boolean isDirectTerminal = cumulativeFilledQuantity.signum() == 0 && version == 2;
+                boolean followsPartialFill = cumulativeFilledQuantity.signum() > 0 && version >= 3;
+                if ((!isDirectTerminal && !followsPartialFill)
+                        || cumulativeFilledQuantity.compareTo(terms.quantity()) >= 0) {
                     throw new IllegalArgumentException(status + " state is inconsistent");
                 }
                 nonBlank(terminalReason, "terminalReason");
@@ -142,9 +149,39 @@ public record OrderLifecycle(
         }
     }
 
-    private static void requireInitial(long version, BigDecimal cumulativeFilledQuantity, OrderStatus status) {
-        if (version != 1 || cumulativeFilledQuantity.signum() != 0) {
+    private static void requireInitial(
+            long version,
+            BigDecimal cumulativeFilledQuantity,
+            Instant createdAt,
+            Instant lastTransitionAt,
+            OrderStatus status) {
+        if (version != 1 || cumulativeFilledQuantity.signum() != 0 || !lastTransitionAt.equals(createdAt)) {
             throw new IllegalArgumentException(status + " is allowed only as an initial state");
+        }
+    }
+
+    private static void validateIdentity(
+            UUID orderId,
+            UUID createCommandId,
+            String requestFingerprint,
+            OrderTerms terms,
+            OrderStatus status,
+            Instant createdAt,
+            String terminalReason) {
+        UUID expectedOrderId = OrderLifecycleIdentity.orderId(terms);
+        if (!expectedOrderId.equals(orderId)) {
+            throw new IllegalArgumentException("orderId does not match order terms");
+        }
+        UUID expectedCreateCommandId = OrderLifecycleIdentity.createCommandId(orderId);
+        if (!expectedCreateCommandId.equals(createCommandId)) {
+            throw new IllegalArgumentException("createCommandId does not match orderId");
+        }
+        OrderStatus initialStatus = status == OrderStatus.REJECTED ? OrderStatus.REJECTED : OrderStatus.ACCEPTED;
+        String initialReason = status == OrderStatus.REJECTED ? terminalReason : null;
+        String expectedFingerprint = OrderLifecycleIdentity.requestFingerprint(
+                terms, initialStatus, createdAt, initialReason);
+        if (!expectedFingerprint.equals(requestFingerprint)) {
+            throw new IllegalArgumentException("requestFingerprint does not match initial aggregate");
         }
     }
 
@@ -152,14 +189,6 @@ public record OrderLifecycle(
         if (value != null) {
             throw new IllegalArgumentException(status + " does not permit terminalReason");
         }
-    }
-
-    private static UUID version5(UUID value, String name) {
-        required(value, name);
-        if (value.version() != 5 || value.variant() != 2) {
-            throw new IllegalArgumentException(name + " must be an RFC 4122 version 5 UUID");
-        }
-        return value;
     }
 
     private static BigDecimal nonNegative(BigDecimal value, String name) {

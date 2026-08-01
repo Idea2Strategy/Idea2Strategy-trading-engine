@@ -53,6 +53,14 @@ class OrderTermsTest {
         assertInvalid(() -> terms(STOP, DAY, null, TEN, new BigDecimal("0.1"), null), "STOP");
     }
 
+    @ParameterizedTest
+    @MethodSource("missingAndExtraTypeFieldShapes")
+    void rejectsEachMissingAndExtraTypeField(
+            OrderType type, BigDecimal limitPrice, BigDecimal stopPrice, BigDecimal trailPercent) {
+        assertThrows(IllegalArgumentException.class,
+                () -> terms(type, DAY, limitPrice, stopPrice, trailPercent, null));
+    }
+
     @Test
     void rejectsMissingAndExtraTimeInForceFields() {
         assertInvalid(() -> terms(MARKET, GTD, null, null, null, null), "expiresAt");
@@ -86,6 +94,20 @@ class OrderTermsTest {
                 Arguments.of(DAY, null),
                 Arguments.of(GTC, null),
                 Arguments.of(GTD, EXPIRY));
+    }
+
+    private static Stream<Arguments> missingAndExtraTypeFieldShapes() {
+        BigDecimal trail = new BigDecimal("0.1");
+        return Stream.of(
+                Arguments.of(MARKET, null, TEN, null),
+                Arguments.of(MARKET, null, null, trail),
+                Arguments.of(LIMIT, TEN, TEN, null),
+                Arguments.of(STOP, TEN, TEN, null),
+                Arguments.of(STOP_LIMIT, null, TEN, null),
+                Arguments.of(STOP_LIMIT, TEN, TEN, trail),
+                Arguments.of(TRAILING_STOP, null, null, null),
+                Arguments.of(TRAILING_STOP, TEN, null, trail),
+                Arguments.of(TRAILING_STOP, null, TEN, trail));
     }
 
     private static OrderTerms terms(

@@ -108,6 +108,64 @@ class OrderLifecycleTest {
                 OrderStatus.CANCELLED, BigDecimal.ZERO, 2, T0, T1, null));
     }
 
+    @Test
+    void rejectsReconstructedIdentitiesAndFingerprintsThatDoNotMatchTheInitialAggregate() {
+        OrderLifecycle accepted = new OrderLifecycleFactory().accepted(dayTerms("5"), T0);
+        UUID anotherVersionFiveId = UUID.fromString("60000000-0000-5000-8000-000000000006");
+
+        assertThrows(IllegalArgumentException.class, () -> new OrderLifecycle(
+                anotherVersionFiveId, accepted.createCommandId(), accepted.requestFingerprint(), accepted.terms(),
+                accepted.status(), accepted.cumulativeFilledQuantity(), accepted.version(), accepted.createdAt(),
+                accepted.lastTransitionAt(), accepted.terminalReason()));
+        assertThrows(IllegalArgumentException.class, () -> new OrderLifecycle(
+                accepted.orderId(), OrderLifecycleIdentity.createCommandId(anotherVersionFiveId),
+                accepted.requestFingerprint(), accepted.terms(), accepted.status(), accepted.cumulativeFilledQuantity(),
+                accepted.version(), accepted.createdAt(), accepted.lastTransitionAt(), accepted.terminalReason()));
+        assertThrows(IllegalArgumentException.class, () -> new OrderLifecycle(
+                accepted.orderId(), accepted.createCommandId(),
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", accepted.terms(),
+                accepted.status(), accepted.cumulativeFilledQuantity(), accepted.version(), accepted.createdAt(),
+                accepted.lastTransitionAt(), accepted.terminalReason()));
+    }
+
+    @Test
+    void rejectsReconstructedGtdOrdersWhoseExpiryDoesNotFollowCreation() {
+        OrderTerms terms = gtdTerms("5", T1);
+        Instant createdAt = T2;
+        UUID orderId = OrderLifecycleIdentity.orderId(terms);
+
+        assertThrows(IllegalArgumentException.class, () -> new OrderLifecycle(
+                orderId,
+                OrderLifecycleIdentity.createCommandId(orderId),
+                OrderLifecycleIdentity.requestFingerprint(terms, OrderStatus.ACCEPTED, createdAt, null),
+                terms,
+                OrderStatus.ACCEPTED,
+                BigDecimal.ZERO,
+                1,
+                createdAt,
+                createdAt,
+                null));
+    }
+
+    @Test
+    void rejectsUnreachableReconstructedInitialAndTerminalHistoryStates() {
+        OrderLifecycle accepted = new OrderLifecycleFactory().accepted(dayTerms("5"), T0);
+        OrderLifecycle rejected = new OrderLifecycleFactory().rejected(dayTerms("5"), T0, "RISK_REJECTED");
+
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                accepted, OrderStatus.ACCEPTED, BigDecimal.ZERO, 1, T1, null));
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                rejected, OrderStatus.REJECTED, BigDecimal.ZERO, 1, T1, "RISK_REJECTED"));
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                accepted, OrderStatus.CANCELLED, BigDecimal.ZERO, 3, T1, "USER_REQUEST"));
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                accepted, OrderStatus.EXPIRED, BigDecimal.ZERO, 3, T1, "DAY_SESSION_CLOSE"));
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                accepted, OrderStatus.CANCELLED, BigDecimal.ONE, 2, T1, "USER_REQUEST"));
+        assertThrows(IllegalArgumentException.class, () -> reconstructed(
+                accepted, OrderStatus.EXPIRED, BigDecimal.ONE, 2, T1, "DAY_SESSION_CLOSE"));
+    }
+
     private static OrderTerms dayTerms(String quantity) {
         return terms(quantity, TimeInForce.DAY, null);
     }
@@ -136,30 +194,30 @@ class OrderLifecycleTest {
     }
 
     private static OrderLifecycle accepted(OrderTerms terms) {
-        return new OrderLifecycle(
-                UUID.fromString("40000000-0000-5000-8000-000000000004"),
-                UUID.fromString("50000000-0000-5000-8000-000000000005"),
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                terms,
-                OrderStatus.ACCEPTED,
-                BigDecimal.ZERO,
-                1,
-                T0,
-                T0,
-                null);
+        return new OrderLifecycleFactory().accepted(terms, T0);
     }
 
     private static OrderLifecycle rejected(OrderTerms terms) {
+        return new OrderLifecycleFactory().rejected(terms, T0, "RISK_REJECTED");
+    }
+
+    private static OrderLifecycle reconstructed(
+            OrderLifecycle initial,
+            OrderStatus status,
+            BigDecimal cumulativeFilledQuantity,
+            long version,
+            Instant lastTransitionAt,
+            String terminalReason) {
         return new OrderLifecycle(
-                UUID.fromString("40000000-0000-5000-8000-000000000004"),
-                UUID.fromString("50000000-0000-5000-8000-000000000005"),
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                terms,
-                OrderStatus.REJECTED,
-                BigDecimal.ZERO,
-                1,
-                T0,
-                T0,
-                "RISK_REJECTED");
+                initial.orderId(),
+                initial.createCommandId(),
+                initial.requestFingerprint(),
+                initial.terms(),
+                status,
+                cumulativeFilledQuantity,
+                version,
+                initial.createdAt(),
+                lastTransitionAt,
+                terminalReason);
     }
 }
