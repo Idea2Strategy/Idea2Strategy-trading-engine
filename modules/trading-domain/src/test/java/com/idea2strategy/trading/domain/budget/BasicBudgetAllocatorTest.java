@@ -175,6 +175,33 @@ class BasicBudgetAllocatorTest {
     }
 
     @Test
+    void doesNotLetStrategiesWithoutCandidatesReduceAllocatableSharedFunds() {
+        BasicBudgetAllocationResult result = new BasicBudgetAllocator().allocate(new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), new BigDecimal("2000"), BigDecimal.ZERO, zeroCostPolicy(),
+                List.of(
+                        strategy(
+                                "20000000-0000-0000-0000-000000000002",
+                                BigDecimal.ONE,
+                                BigDecimal.ZERO,
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("3000"))),
+                        strategy(
+                                "40000000-0000-0000-0000-000000000004",
+                                BigDecimal.ONE,
+                                BigDecimal.ZERO,
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("1000")),
+                                "50000000-0000-0000-0000-000000000005"))));
+
+        BasicBudgetDecision decision = result.decisions().getFirst();
+        assertEquals(0, decision.totalRequiredCash().compareTo(new BigDecimal("1000")));
+        assertEquals(BudgetDecisionStatus.ACCEPTED, decision.status());
+        assertTrue(decision.reasonCodes().isEmpty());
+    }
+
+    @Test
     void emitsTheSameResultWhenStrategyAndCandidateInputOrdersAreReversed() {
         BasicBudgetAllocationRequest orderedRequest = new BasicBudgetAllocationRequest(
                 new BigDecimal("10000"), new BigDecimal("2000"), BigDecimal.ZERO, zeroCostPolicy(),
