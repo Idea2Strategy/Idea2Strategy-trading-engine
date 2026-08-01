@@ -3,5 +3,18 @@ plugins {
 }
 
 dependencies {
-    implementation(project(":modules:trading-application"))
+    api(project(":modules:trading-application"))
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
+    implementation("org.springframework.boot:spring-boot-starter-data-jpa")
+    implementation("org.springframework:spring-jdbc")
+    implementation("org.jooq:jooq")
+    implementation("org.flywaydb:flyway-core")
+    implementation("org.flywaydb:flyway-database-postgresql")
+    runtimeOnly("org.postgresql:postgresql")
+
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation(platform("org.testcontainers:testcontainers-bom:1.21.4"))
+    testImplementation("org.testcontainers:junit-jupiter")
+    testImplementation("org.testcontainers:postgresql")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
