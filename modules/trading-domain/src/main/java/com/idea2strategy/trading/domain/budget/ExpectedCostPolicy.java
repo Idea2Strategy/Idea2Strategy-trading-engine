@@ -8,17 +8,17 @@ public record ExpectedCostPolicy(
 
     public ExpectedCostPolicy {
         Objects.requireNonNull(version, "version");
-        requireNonNegative(feeRate, "feeRate");
-        requireNonNegative(adverseBuySlippageRate, "adverseBuySlippageRate");
+        requireRate(feeRate, "feeRate");
+        requireRate(adverseBuySlippageRate, "adverseBuySlippageRate");
         if (version.isBlank()) {
             throw new IllegalArgumentException("cost policy version must not be blank");
         }
     }
 
-    private static void requireNonNegative(BigDecimal value, String name) {
+    private static void requireRate(BigDecimal value, String name) {
         Objects.requireNonNull(value, name);
-        if (value.signum() < 0) {
-            throw new IllegalArgumentException(name + " must not be negative");
+        if (value.signum() < 0 || value.compareTo(BigDecimal.ONE) > 0) {
+            throw new IllegalArgumentException(name + " must be between zero and one");
         }
     }
 }

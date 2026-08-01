@@ -271,6 +271,69 @@ class BasicBudgetAllocatorTest {
         assertTrue(decision.reasonCodes().contains(BudgetReasonCode.COMMON_FUNDS_PROPORTIONAL_REDUCTION));
     }
 
+    @Test
+    void aggregateRequiredCashStaysWithinSharedCashAndEachStrategyCap() {
+        BasicBudgetAllocationResult result = new BasicBudgetAllocator().allocate(new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), new BigDecimal("3000"), new BigDecimal("500"),
+                new ExpectedCostPolicy("virtual-fill-cost-v1", new BigDecimal("0.002"), new BigDecimal("0.0005")),
+                List.of(
+                        strategy(
+                                "20000000-0000-0000-0000-000000000002",
+                                new BigDecimal("0.50"),
+                                new BigDecimal("1000"),
+                                new BigDecimal("200"),
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("5000")),
+                                "30000000-0000-0000-0000-000000000003",
+                                "40000000-0000-0000-0000-000000000004"),
+                        strategy(
+                                "50000000-0000-0000-0000-000000000005",
+                                new BigDecimal("0.20"),
+                                new BigDecimal("800"),
+                                new BigDecimal("200"),
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("1200")),
+                                "60000000-0000-0000-0000-000000000006"))));
+
+        assertTrue(result.decisions().stream()
+                .map(BasicBudgetDecision::totalRequiredCash)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .compareTo(result.spendableCash()) <= 0);
+        assertTrue(totalRequiredCashFor(result, "20000000-0000-0000-0000-000000000002")
+                .add(new BigDecimal("1200"))
+                .compareTo(new BigDecimal("5000")) <= 0);
+        assertTrue(totalRequiredCashFor(result, "50000000-0000-0000-0000-000000000005")
+                .add(new BigDecimal("1000"))
+                .compareTo(new BigDecimal("2000")) <= 0);
+    }
+
+    @Test
+    void zeroStrategyCapacityProducesExplicitRejectedDecision() {
+        BasicBudgetAllocationResult result = new BasicBudgetAllocator().allocate(new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), new BigDecimal("1000"), BigDecimal.ZERO, zeroCostPolicy(),
+                List.of(strategy(
+                        "20000000-0000-0000-0000-000000000002",
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        true,
+                        BasicSizingPolicy.fixedAmount(new BigDecimal("1000")),
+                        "30000000-0000-0000-0000-000000000003"))));
+
+        BasicBudgetDecision decision = result.decisions().getFirst();
+        assertEquals(BudgetDecisionStatus.REJECTED, decision.status());
+        assertEquals(0, decision.totalRequiredCash().signum());
+        assertTrue(decision.reasonCodes().contains(BudgetReasonCode.NO_AVAILABLE_STRATEGY_BUDGET));
+    }
+
+    private static BigDecimal totalRequiredCashFor(BasicBudgetAllocationResult result, String strategyId) {
+        UUID id = UUID.fromString(strategyId);
+        return result.decisions().stream()
+                .filter(decision -> decision.strategyId().equals(id))
+                .map(BasicBudgetDecision::totalRequiredCash)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
     private static BasicStrategyBudgetRequest strategy(
             String strategyId,
             BigDecimal maximumEquityRatio,
