@@ -1,6 +1,5 @@
 package com.idea2strategy.trading.persistence.intent;
 
-import com.idea2strategy.trading.domain.intent.OrderIntentIdentity;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -35,13 +34,14 @@ public class JooqOrderIntentBatchQuery {
 
     private OrderIntentBatchPersistenceView toView(Record header) {
         UUID batchId = header.get("batch_id", UUID.class);
-        var intents = dsl.fetch("""
-                        select intent_id, candidate_id
+        var mappings = dsl.fetch("""
+                        select ordinal, intent_id, candidate_id
                         from trading.order_intent_identity
                         where batch_id = ?
                         order by ordinal
                         """, batchId)
-                .map(record -> new OrderIntentIdentity(
+                .map(record -> new OrderIntentBatchPersistenceView.Mapping(
+                        record.get("ordinal", Integer.class),
                         record.get("intent_id", UUID.class),
                         record.get("candidate_id", UUID.class)));
         return new OrderIntentBatchPersistenceView(
@@ -50,6 +50,6 @@ public class JooqOrderIntentBatchQuery {
                 header.get("evaluation_id", UUID.class),
                 header.get("source_candidate_batch_id", UUID.class),
                 header.get("request_fingerprint", String.class),
-                intents);
+                mappings);
     }
 }

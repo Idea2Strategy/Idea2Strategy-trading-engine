@@ -20,6 +20,7 @@ import java.util.stream.Stream;
 import org.flywaydb.core.Flyway;
 import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -52,6 +54,7 @@ class OrderIntentBatchPersistenceTest {
 
     private static DriverManagerDataSource dataSource;
     private static JdbcClient jdbcClient;
+    private static JdbcTransactionManager transactionManager;
     private static PostgresOrderIntentBatchStore store;
     private static JooqOrderIntentBatchQuery query;
 
@@ -60,13 +63,22 @@ class OrderIntentBatchPersistenceTest {
         dataSource = new DriverManagerDataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
         Flyway.configure().dataSource(dataSource).load().migrate();
         jdbcClient = JdbcClient.create(dataSource);
-        store = new PostgresOrderIntentBatchStore(jdbcClient, new JdbcTransactionManager(dataSource));
+        transactionManager = new JdbcTransactionManager(dataSource);
+        store = new PostgresOrderIntentBatchStore(jdbcClient, transactionManager);
         query = new JooqOrderIntentBatchQuery(DSL.using(dataSource, SQLDialect.POSTGRES));
     }
 
     @BeforeEach
     void clearIntentRows() {
         jdbcClient.sql("truncate table trading.order_intent_batch cascade").update();
+    }
+
+    @AfterEach
+    void removePrimaryKeyConflictTrigger() {
+        jdbcClient.sql("drop trigger if exists force_order_intent_batch_pk_conflict on trading.order_intent_batch")
+                .update();
+        jdbcClient.sql("drop function if exists trading.force_order_intent_batch_pk_conflict()")
+                .update();
     }
 
     @Test
@@ -105,6 +117,40 @@ class OrderIntentBatchPersistenceTest {
         assertEquals(desired, restarted);
         assertEquals(1, query.countBatches());
         assertEquals(2, query.countMappings());
+    }
+
+    @Test
+    void ambientTransactionRemainsUsableAfterPrimaryKeyConflictRecovery() {
+        OrderIntentBatch desired = desiredBatch(List.of());
+        store.createOrLoad(desired);
+        jdbcClient.sql("""
+                        create function trading.force_order_intent_batch_pk_conflict()
+                        returns trigger
+                        language plpgsql
+                        as $trigger$
+                        begin
+                            new.evaluation_id := '20000000-0000-0000-0000-000000000012';
+                            new.source_candidate_batch_id := '30000000-0000-0000-0000-000000000013';
+                            return new;
+                        end
+                        $trigger$
+                        """)
+                .update();
+        jdbcClient.sql("""
+                        create trigger force_order_intent_batch_pk_conflict
+                        before insert on trading.order_intent_batch
+                        for each row execute function trading.force_order_intent_batch_pk_conflict()
+                        """)
+                .update();
+        TransactionTemplate outerTransaction = new TransactionTemplate(transactionManager);
+
+        Integer subsequentQueryResult = outerTransaction.execute(status -> {
+            assertEquals(desired, newStore().createOrLoad(desired));
+            return jdbcClient.sql("select 1").query(Integer.class).single();
+        });
+
+        assertEquals(1, subsequentQueryResult);
+        assertEquals(desired, query.findByEvaluationId(EVALUATION_ID).orElseThrow().toDomain());
     }
 
     @Test
@@ -214,6 +260,58 @@ class OrderIntentBatchPersistenceTest {
         assertThrows(OrderIntentBatchConflictException.class, () -> newStore().createOrLoad(desired));
     }
 
+    @Test
+    void versionFourStoredBatchIdIsConflict() {
+        OrderIntentBatch desired = desiredBatch(List.of());
+        store.createOrLoad(desired);
+        jdbcClient.sql("""
+                        update trading.order_intent_batch
+                        set batch_id = '00000000-0000-4000-8000-000000000001'
+                        where evaluation_id = :evaluationId
+                        """)
+                .param("evaluationId", EVALUATION_ID)
+                .update();
+
+        assertThrows(OrderIntentBatchConflictException.class, () -> newStore().createOrLoad(desired));
+    }
+
+    @Test
+    void versionFourStoredIntentIdIsConflict() {
+        OrderIntentBatch desired = desiredBatch(List.of(CANDIDATE_ONE));
+        store.createOrLoad(desired);
+        jdbcClient.sql("""
+                        update trading.order_intent_identity
+                        set intent_id = '00000000-0000-4000-8000-000000000002'
+                        where candidate_id = :candidateId
+                        """)
+                .param("candidateId", CANDIDATE_ONE)
+                .update();
+
+        assertThrows(OrderIntentBatchConflictException.class, () -> newStore().createOrLoad(desired));
+    }
+
+    @ParameterizedTest
+    @MethodSource("malformedOrdinalLayouts")
+    void malformedStoredOrdinalLayoutIsConflict(int firstOrdinal, int secondOrdinal) {
+        OrderIntentBatch desired = desiredBatch(List.of(CANDIDATE_ONE, CANDIDATE_TWO));
+        store.createOrLoad(desired);
+        jdbcClient.sql("update trading.order_intent_identity set ordinal = ordinal + 10").update();
+        jdbcClient.sql("""
+                        update trading.order_intent_identity
+                        set ordinal = case candidate_id
+                            when :firstCandidateId then :firstOrdinal
+                            when :secondCandidateId then :secondOrdinal
+                        end
+                        """)
+                .param("firstCandidateId", CANDIDATE_ONE)
+                .param("firstOrdinal", firstOrdinal)
+                .param("secondCandidateId", CANDIDATE_TWO)
+                .param("secondOrdinal", secondOrdinal)
+                .update();
+
+        assertThrows(OrderIntentBatchConflictException.class, () -> newStore().createOrLoad(desired));
+    }
+
     @ParameterizedTest
     @MethodSource("changedHeaderFields")
     void changedStoredHeaderFieldConflicts(String column, Object changedValue) {
@@ -258,6 +356,9 @@ class OrderIntentBatchPersistenceTest {
         assertEquals(
                 List.of(CANDIDATE_ONE, CANDIDATE_TWO),
                 stored.intents().stream().map(identity -> identity.candidateId()).toList());
+        assertEquals(
+                List.of(0, 1),
+                stored.mappings().stream().map(OrderIntentBatchPersistenceView.Mapping::ordinal).toList());
         assertEquals(forward, stored.toDomain());
     }
 
@@ -277,7 +378,7 @@ class OrderIntentBatchPersistenceTest {
     private static PostgresOrderIntentBatchStore newStore() {
         return new PostgresOrderIntentBatchStore(
                 JdbcClient.create(dataSource),
-                new JdbcTransactionManager(dataSource));
+                transactionManager);
     }
 
     private static Stream<Arguments> changedHeaderFields() {
@@ -291,5 +392,11 @@ class OrderIntentBatchPersistenceTest {
                 Arguments.of("bot_id", OTHER_BOT_ID),
                 Arguments.of("source_candidate_batch_id", OTHER_SOURCE_BATCH_ID),
                 Arguments.of("request_fingerprint", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
+    }
+
+    private static Stream<Arguments> malformedOrdinalLayouts() {
+        return Stream.of(
+                Arguments.of(1, 2),
+                Arguments.of(0, 2));
     }
 }

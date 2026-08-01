@@ -11,19 +11,36 @@ public record OrderIntentBatchPersistenceView(
         UUID evaluationId,
         UUID sourceCandidateBatchId,
         String requestFingerprint,
-        List<OrderIntentIdentity> intents) {
+        List<Mapping> mappings) {
 
     public OrderIntentBatchPersistenceView {
-        intents = List.copyOf(intents);
+        mappings = List.copyOf(mappings);
+    }
+
+    public List<OrderIntentIdentity> intents() {
+        return mappings.stream()
+                .map(Mapping::toDomain)
+                .toList();
     }
 
     public OrderIntentBatch toDomain() {
+        for (int index = 0; index < mappings.size(); index++) {
+            if (mappings.get(index).ordinal() != index) {
+                throw new IllegalArgumentException("stored intent ordinals must be contiguous and zero-based");
+            }
+        }
         return new OrderIntentBatch(
                 batchId,
                 botId,
                 evaluationId,
                 sourceCandidateBatchId,
                 requestFingerprint,
-                intents);
+                intents());
+    }
+
+    public record Mapping(int ordinal, UUID intentId, UUID candidateId) {
+        private OrderIntentIdentity toDomain() {
+            return new OrderIntentIdentity(intentId, candidateId);
+        }
     }
 }
