@@ -138,6 +138,12 @@ class OrderValidityModelTest {
     }
 
     @Test
+    void rejectsBlankResultFundsSnapshotVersion() {
+        assertThrows(IllegalArgumentException.class, () -> new OrderValidityResult(
+                proposalId(), OrderValidityStatus.ACCEPTED, List.of(), " ", "instrument-v1", List.of()));
+    }
+
+    @Test
     void permitsAbsentInstrumentPolicyVersionButRejectsBlankPresentVersion() {
         assertAll(
                 () -> assertEquals(null, new OrderValidityResult(
