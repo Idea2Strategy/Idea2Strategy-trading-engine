@@ -22,9 +22,15 @@ public final class BasicBudgetAllocator {
                 .sorted(Comparator.comparing(BasicStrategyBudgetRequest::strategyId))
                 .map(strategy -> planFor(strategy, request.totalEquity()))
                 .toList();
+        BigDecimal totalCapLimited = strategyPlans.stream()
+                .map(StrategyPlan::capLimitedTotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal sharedFactor = totalCapLimited.signum() == 0 || totalCapLimited.compareTo(spendableCash) <= 0
+                ? BigDecimal.ONE
+                : spendableCash.divide(totalCapLimited, DIVISION_SCALE, RoundingMode.DOWN);
         List<BasicBudgetDecision> decisions = new ArrayList<>();
         for (StrategyPlan strategyPlan : strategyPlans) {
-            decisions.addAll(decisionsFor(strategyPlan, request.costPolicy()));
+            decisions.addAll(decisionsFor(applySharedFunds(strategyPlan, sharedFactor, spendableCash), request.costPolicy()));
         }
 
         return new BasicBudgetAllocationResult(spendableCash, decisions);
@@ -34,6 +40,7 @@ public final class BasicBudgetAllocator {
         List<UUID> candidateIds = strategy.candidateIds().stream().sorted().toList();
         if (!strategy.positionValuationComplete()) {
             return new StrategyPlan(strategy.strategyId(), candidateIds, BigDecimal.ZERO, BigDecimal.ZERO,
+                    BigDecimal.ZERO,
                     BudgetDecisionStatus.REJECTED, List.of(BudgetReasonCode.POSITION_VALUATION_UNAVAILABLE));
         }
 
@@ -46,14 +53,53 @@ public final class BasicBudgetAllocator {
         BigDecimal capLimitedTotal = rawRequestedTotal.min(remainingBudget);
         if (remainingBudget.signum() == 0) {
             return new StrategyPlan(strategy.strategyId(), candidateIds, rawRequestedTotal, capLimitedTotal,
+                    capLimitedTotal,
                     BudgetDecisionStatus.REJECTED, List.of(BudgetReasonCode.NO_AVAILABLE_STRATEGY_BUDGET));
         }
         if (rawRequestedTotal.compareTo(remainingBudget) > 0) {
             return new StrategyPlan(strategy.strategyId(), candidateIds, rawRequestedTotal, capLimitedTotal,
+                    capLimitedTotal,
                     BudgetDecisionStatus.REDUCED, List.of(BudgetReasonCode.STRATEGY_BUDGET_CAP));
         }
         return new StrategyPlan(strategy.strategyId(), candidateIds, rawRequestedTotal, capLimitedTotal,
+                capLimitedTotal,
                 BudgetDecisionStatus.ACCEPTED, List.of());
+    }
+
+    private StrategyPlan applySharedFunds(StrategyPlan strategyPlan, BigDecimal sharedFactor, BigDecimal spendableCash) {
+        if (strategyPlan.capLimitedTotal().signum() == 0 || sharedFactor.compareTo(BigDecimal.ONE) >= 0) {
+            return strategyPlan;
+        }
+
+        if (spendableCash.signum() == 0) {
+            return new StrategyPlan(
+                    strategyPlan.strategyId(),
+                    strategyPlan.candidateIds(),
+                    strategyPlan.rawRequestedTotal(),
+                    strategyPlan.capLimitedTotal(),
+                    BigDecimal.ZERO,
+                    BudgetDecisionStatus.REJECTED,
+                    withReason(
+                            withReason(strategyPlan.reasonCodes(), BudgetReasonCode.COMMON_FUNDS_PROPORTIONAL_REDUCTION),
+                            BudgetReasonCode.NO_AVAILABLE_SHARED_FUNDS));
+        }
+
+        return new StrategyPlan(
+                strategyPlan.strategyId(),
+                strategyPlan.candidateIds(),
+                strategyPlan.rawRequestedTotal(),
+                strategyPlan.capLimitedTotal(),
+                strategyPlan.capLimitedTotal().multiply(sharedFactor),
+                BudgetDecisionStatus.REDUCED,
+                withReason(strategyPlan.reasonCodes(), BudgetReasonCode.COMMON_FUNDS_PROPORTIONAL_REDUCTION));
+    }
+
+    private List<BudgetReasonCode> withReason(List<BudgetReasonCode> reasonCodes, BudgetReasonCode additionalReason) {
+        List<BudgetReasonCode> reasons = new ArrayList<>(reasonCodes);
+        if (!reasons.contains(additionalReason)) {
+            reasons.add(additionalReason);
+        }
+        return List.copyOf(reasons);
     }
 
     private List<BasicBudgetDecision> decisionsFor(StrategyPlan strategyPlan, ExpectedCostPolicy costPolicy) {
@@ -64,7 +110,7 @@ public final class BasicBudgetAllocator {
 
         BigDecimal candidateRequestedCash = strategyPlan.rawRequestedTotal()
                 .divide(BigDecimal.valueOf(candidateCount), DIVISION_SCALE, RoundingMode.DOWN);
-        BigDecimal candidateEnvelope = strategyPlan.capLimitedTotal()
+        BigDecimal candidateEnvelope = strategyPlan.approvedStrategyEnvelope()
                 .divide(BigDecimal.valueOf(candidateCount), DIVISION_SCALE, RoundingMode.DOWN);
         BigDecimal costMultiplier = BigDecimal.ONE.add(costPolicy.adverseBuySlippageRate())
                 .multiply(BigDecimal.ONE.add(costPolicy.feeRate()));
@@ -93,6 +139,7 @@ public final class BasicBudgetAllocator {
             List<UUID> candidateIds,
             BigDecimal rawRequestedTotal,
             BigDecimal capLimitedTotal,
+            BigDecimal approvedStrategyEnvelope,
             BudgetDecisionStatus status,
             List<BudgetReasonCode> reasonCodes) {
     }

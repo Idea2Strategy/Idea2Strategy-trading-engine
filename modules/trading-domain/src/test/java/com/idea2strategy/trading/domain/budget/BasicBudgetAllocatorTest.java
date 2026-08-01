@@ -139,6 +139,111 @@ class BasicBudgetAllocatorTest {
         assertEquals(0, result.spendableCash().compareTo(new BigDecimal("7500")));
     }
 
+    @Test
+    void proportionallyReducesAllStrategiesWhenSharedCashIsShort() {
+        BasicBudgetAllocationResult result = new BasicBudgetAllocator().allocate(new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), new BigDecimal("2000"), BigDecimal.ZERO, zeroCostPolicy(),
+                List.of(
+                        strategy(
+                                "20000000-0000-0000-0000-000000000002",
+                                BigDecimal.ONE,
+                                BigDecimal.ZERO,
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("3000")),
+                                "30000000-0000-0000-0000-000000000003"),
+                        strategy(
+                                "40000000-0000-0000-0000-000000000004",
+                                BigDecimal.ONE,
+                                BigDecimal.ZERO,
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("1000")),
+                                "50000000-0000-0000-0000-000000000005"))));
+
+        assertTrue(result.decisions().stream()
+                .map(BasicBudgetDecision::totalRequiredCash)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .compareTo(new BigDecimal("2000")) <= 0);
+        assertEquals(new BigDecimal("3.000000000000000000"), result.decisions().get(0).approvedPrincipal()
+                .divide(result.decisions().get(1).approvedPrincipal(), 18, RoundingMode.DOWN));
+        assertTrue(result.decisions().stream()
+                .filter(decision -> decision.approvedPrincipal().signum() > 0)
+                .allMatch(decision -> decision.status() == BudgetDecisionStatus.REDUCED));
+        assertTrue(result.decisions().stream().allMatch(decision -> decision.reasonCodes()
+                .contains(BudgetReasonCode.COMMON_FUNDS_PROPORTIONAL_REDUCTION)));
+    }
+
+    @Test
+    void emitsTheSameResultWhenStrategyAndCandidateInputOrdersAreReversed() {
+        BasicBudgetAllocationRequest orderedRequest = new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), new BigDecimal("2000"), BigDecimal.ZERO, zeroCostPolicy(),
+                List.of(
+                        strategy(
+                                "20000000-0000-0000-0000-000000000002",
+                                BigDecimal.ONE,
+                                BigDecimal.ZERO,
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("3000")),
+                                "30000000-0000-0000-0000-000000000003",
+                                "40000000-0000-0000-0000-000000000004"),
+                        strategy(
+                                "50000000-0000-0000-0000-000000000005",
+                                BigDecimal.ONE,
+                                BigDecimal.ZERO,
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("1000")),
+                                "60000000-0000-0000-0000-000000000006",
+                                "70000000-0000-0000-0000-000000000007")));
+        BasicBudgetAllocationRequest reversedRequest = new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), new BigDecimal("2000"), BigDecimal.ZERO, zeroCostPolicy(),
+                List.of(
+                        strategy(
+                                "50000000-0000-0000-0000-000000000005",
+                                BigDecimal.ONE,
+                                BigDecimal.ZERO,
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("1000")),
+                                "70000000-0000-0000-0000-000000000007",
+                                "60000000-0000-0000-0000-000000000006"),
+                        strategy(
+                                "20000000-0000-0000-0000-000000000002",
+                                BigDecimal.ONE,
+                                BigDecimal.ZERO,
+                                BigDecimal.ZERO,
+                                true,
+                                BasicSizingPolicy.fixedAmount(new BigDecimal("3000")),
+                                "40000000-0000-0000-0000-000000000004",
+                                "30000000-0000-0000-0000-000000000003")));
+
+        BasicBudgetAllocator allocator = new BasicBudgetAllocator();
+
+        assertEquals(allocator.allocate(orderedRequest), allocator.allocate(reversedRequest));
+    }
+
+    @Test
+    void rejectsOtherwiseAllocatableStrategiesWhenNoSharedCashIsAvailable() {
+        BasicBudgetAllocationResult result = new BasicBudgetAllocator().allocate(new BasicBudgetAllocationRequest(
+                new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO, zeroCostPolicy(),
+                List.of(strategy(
+                        "20000000-0000-0000-0000-000000000002",
+                        BigDecimal.ONE,
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        true,
+                        BasicSizingPolicy.fixedAmount(new BigDecimal("1000")),
+                        "30000000-0000-0000-0000-000000000003"))));
+
+        BasicBudgetDecision decision = result.decisions().getFirst();
+        assertEquals(BudgetDecisionStatus.REJECTED, decision.status());
+        assertEquals(0, decision.totalRequiredCash().signum());
+        assertTrue(decision.reasonCodes().contains(BudgetReasonCode.NO_AVAILABLE_SHARED_FUNDS));
+        assertTrue(decision.reasonCodes().contains(BudgetReasonCode.COMMON_FUNDS_PROPORTIONAL_REDUCTION));
+    }
+
     private static BasicStrategyBudgetRequest strategy(
             String strategyId,
             BigDecimal maximumEquityRatio,
