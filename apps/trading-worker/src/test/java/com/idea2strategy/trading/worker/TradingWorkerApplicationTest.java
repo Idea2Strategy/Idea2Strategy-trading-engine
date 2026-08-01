@@ -4,17 +4,28 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.idea2strategy.trading.application.candidate.CandidateBatchClaimLostException;
+import com.idea2strategy.trading.application.order.FillOrderCommand;
 import com.idea2strategy.trading.application.port.CandidateBatchStatusPort;
 import com.idea2strategy.trading.domain.candidate.CandidateBatch;
 import com.idea2strategy.trading.domain.intent.OrderIntentBatch;
 import com.idea2strategy.trading.domain.intent.OrderIntentBatchFactory;
 import com.idea2strategy.trading.domain.intent.OrderIntentBatchRequest;
+import com.idea2strategy.trading.domain.order.OrderLifecycle;
+import com.idea2strategy.trading.domain.order.OrderLifecycleFactory;
+import com.idea2strategy.trading.domain.order.OrderSide;
+import com.idea2strategy.trading.domain.order.OrderTerms;
+import com.idea2strategy.trading.domain.order.OrderType;
+import com.idea2strategy.trading.domain.order.TimeInForce;
 import com.idea2strategy.trading.persistence.candidate.CandidateBatchProcessingStatus;
 import com.idea2strategy.trading.persistence.candidate.JooqCandidateBatchQuery;
 import com.idea2strategy.trading.persistence.candidate.PostgresCandidateBatchClaimAdapter;
 import com.idea2strategy.trading.persistence.intent.PostgresOrderIntentBatchStore;
+import com.idea2strategy.trading.persistence.order.JooqOrderLifecycleQuery;
+import com.idea2strategy.trading.persistence.order.PostgresOrderLifecycleStore;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -61,6 +72,12 @@ class TradingWorkerApplicationTest {
 
     @Autowired
     private PostgresOrderIntentBatchStore orderIntentBatchStore;
+
+    @Autowired
+    private PostgresOrderLifecycleStore orderLifecycleStore;
+
+    @Autowired
+    private JooqOrderLifecycleQuery orderLifecycleQuery;
 
     @Autowired
     private PlatformTransactionManager transactionManager;
@@ -130,5 +147,80 @@ class TradingWorkerApplicationTest {
         });
 
         assertEquals(1, subsequentQueryResult);
+    }
+
+    @Test
+    void exactLifecycleReplayUsesAutoConfiguredJpaTransactionManagerInsideOuterTransaction() {
+        assertInstanceOf(JpaTransactionManager.class, transactionManager);
+        OrderLifecycle desired = new OrderLifecycleFactory().accepted(new OrderTerms(
+                UUID.fromString("b1000000-0000-0000-0000-000000000001"),
+                UUID.fromString("b2000000-0000-0000-0000-000000000002"),
+                UUID.fromString("b3000000-0000-0000-0000-000000000003"),
+                OrderSide.BUY,
+                new BigDecimal("5"),
+                OrderType.MARKET,
+                TimeInForce.DAY,
+                null,
+                null,
+                null,
+                null), Instant.parse("2026-08-01T01:00:00Z"));
+        FillOrderCommand partialFill = new FillOrderCommand(
+                UUID.fromString("b4000000-0000-0000-0000-000000000004"),
+                desired.orderId(),
+                1,
+                new BigDecimal("2"),
+                Instant.parse("2026-08-01T01:01:00Z"));
+        TransactionTemplate outerTransaction = new TransactionTemplate(transactionManager);
+
+        Integer subsequentQueryResult = outerTransaction.execute(status -> {
+            assertEquals(desired, orderLifecycleStore.createOrLoad(desired));
+            OrderLifecycle partial = orderLifecycleStore.apply(partialFill);
+            assertEquals(partial, orderLifecycleStore.apply(partialFill));
+            return jdbcClient.sql("select 1").query(Integer.class).single();
+        });
+
+        assertEquals(1, subsequentQueryResult);
+        assertEquals(List.of(1L, 2L), orderLifecycleQuery.findTransitions(desired.orderId()).stream()
+                .map(JooqOrderLifecycleQuery.TransitionView::version)
+                .toList());
+    }
+
+    @Test
+    void lifecycleWritesEnlistInCallerOwnedJpaTransactionRollback() {
+        assertInstanceOf(JpaTransactionManager.class, transactionManager);
+        OrderLifecycle desired = new OrderLifecycleFactory().accepted(new OrderTerms(
+                UUID.fromString("c1000000-0000-0000-0000-000000000001"),
+                UUID.fromString("c2000000-0000-0000-0000-000000000002"),
+                UUID.fromString("c3000000-0000-0000-0000-000000000003"),
+                OrderSide.BUY,
+                new BigDecimal("5"),
+                OrderType.MARKET,
+                TimeInForce.DAY,
+                null,
+                null,
+                null,
+                null), Instant.parse("2026-08-01T02:00:00Z"));
+        FillOrderCommand partialFill = new FillOrderCommand(
+                UUID.fromString("c4000000-0000-0000-0000-000000000004"),
+                desired.orderId(),
+                1,
+                new BigDecimal("2"),
+                Instant.parse("2026-08-01T02:01:00Z"));
+        TransactionTemplate outerTransaction = new TransactionTemplate(transactionManager);
+
+        outerTransaction.executeWithoutResult(status -> {
+            orderLifecycleStore.createOrLoad(desired);
+            orderLifecycleStore.apply(partialFill);
+            status.setRollbackOnly();
+        });
+
+        assertFalse(orderLifecycleQuery.findByOrderId(desired.orderId()).isPresent());
+        assertTrue(orderLifecycleQuery.findTransitions(desired.orderId()).isEmpty());
+        assertEquals(0, jdbcClient.sql("""
+                        select count(*) from trading.order_lifecycle_command where order_id = :orderId
+                        """)
+                .param("orderId", desired.orderId())
+                .query(Integer.class)
+                .single());
     }
 }
