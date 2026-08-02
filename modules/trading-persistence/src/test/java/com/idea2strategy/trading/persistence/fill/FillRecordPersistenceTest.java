@@ -109,6 +109,11 @@ class FillRecordPersistenceTest {
                 Statement statement = connection.createStatement()) {
             statement.execute("set session_replication_role = replica");
             statement.addBatch("""
+                    insert into identity.accounts (id, lifecycle_status, status_changed_at, created_at)
+                    values ('a0000000-0000-4000-8000-000000000001', 'ACTIVE',
+                        '2026-08-01T00:00:00+00', '2026-08-01T00:00:00+00')
+                    """);
+            statement.addBatch("""
                     insert into bot.bots (id, owner_account_id, mode, name, lifecycle_status,
                         lifecycle_changed_at, created_at, execution_eligible_from)
                     values ('%s', 'a0000000-0000-4000-8000-000000000001', 'BASIC', 'Fill bot',
