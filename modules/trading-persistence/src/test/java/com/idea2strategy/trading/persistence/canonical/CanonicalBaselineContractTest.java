@@ -66,7 +66,7 @@ class CanonicalBaselineContractTest {
                 .param(APPLICATION_SCHEMAS.toArray(String[]::new))
                 .query(Integer.class)
                 .single();
-        assertEquals(139, tables, "the pinned canonical baseline no longer produces the canonical schema");
+        assertEquals(145, tables, "the pinned canonical baseline no longer produces the canonical schema");
     }
 
     @Test
