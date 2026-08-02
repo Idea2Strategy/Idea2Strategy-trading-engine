@@ -47,6 +47,15 @@ public enum BotEventType {
     /** The platform generated a forced close for a bot stop, risk breach or competition end. */
     SYSTEM_CLOSE_REQUESTED,
 
+    /**
+     * A bot stop settlement was requested. This is the first checkpoint of the settlement, and
+     * because canonical storage has no stop settlement table the event itself carries the state.
+     */
+    SETTLEMENT_REQUESTED,
+    /** One settlement step advanced the checkpoint without ending the settlement. */
+    SETTLEMENT_STEP_RECORDED,
+    /** Bot stop settlement reached its terminal success checkpoint. */
+    SETTLEMENT_COMPLETED,
     /** Documented in the canonical note. Bot stop settlement could not complete. */
     SETTLEMENT_FAILED,
     /** Documented in the canonical note. The official ledger failed its own invariant. */
