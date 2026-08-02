@@ -36,7 +36,7 @@ public class PostgresFillRecordStore implements FillRecordStore {
 
         Optional<FillRecord> latest = findLatest(desired.orderId(), desired.sourceExecutionId(), true);
         if (desired.revision() == 0) {
-            if (latest.isPresent()) throw conflict("original execution already exists");
+            if (latest.isPresent()) return replay(latest.orElseThrow(), desired);
         } else {
             FillRecord previous = latest.orElseThrow(() -> conflict("correction arrived before original"));
             if (previous.revision() + 1 != desired.revision()
