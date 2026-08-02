@@ -5,9 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.idea2strategy.trading.application.port.OrderIntentBatchStore;
+import com.idea2strategy.trading.domain.eligibility.OrderPositionEffect;
+import com.idea2strategy.trading.domain.intent.IntentDecision;
 import com.idea2strategy.trading.domain.intent.OrderIntentBatch;
 import com.idea2strategy.trading.domain.intent.OrderIntentBatchFactory;
 import com.idea2strategy.trading.domain.intent.OrderIntentBatchRequest;
+import com.idea2strategy.trading.domain.intent.OrderIntentRequest;
+import com.idea2strategy.trading.domain.order.OrderSide;
+import com.idea2strategy.trading.domain.order.OrderType;
+import com.idea2strategy.trading.domain.order.TimeInForce;
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -76,20 +84,46 @@ class OrderIntentBatchServiceTest {
     private static OrderIntentBatchRequest request() {
         return new OrderIntentBatchRequest(
                 UUID.fromString("10000000-0000-0000-0000-000000000001"),
+                UUID.fromString("11000000-0000-0000-0000-000000000011"),
+                UUID.fromString("12000000-0000-0000-0000-000000000012"),
                 UUID.fromString("20000000-0000-0000-0000-000000000002"),
                 UUID.fromString("30000000-0000-0000-0000-000000000003"),
+                Instant.parse("2026-08-02T09:00:00Z"),
                 List.of(
-                        UUID.fromString("40000000-0000-0000-0000-000000000004"),
-                        UUID.fromString("50000000-0000-0000-0000-000000000005")));
+                        intent(UUID.fromString("40000000-0000-0000-0000-000000000004")),
+                        intent(UUID.fromString("50000000-0000-0000-0000-000000000005"))));
+    }
+
+    private static OrderIntentRequest intent(UUID candidateId) {
+        return new OrderIntentRequest(
+                candidateId,
+                UUID.fromString("60000000-0000-0000-0000-000000000006"),
+                UUID.fromString("70000000-0000-0000-0000-000000000007"),
+                OrderSide.BUY,
+                OrderPositionEffect.INCREASE_LONG,
+                OrderType.MARKET,
+                TimeInForce.DAY,
+                new BigDecimal("2"),
+                null,
+                null,
+                null,
+                IntentDecision.APPROVED,
+                "ELIGIBLE",
+                new BigDecimal("2"));
     }
 
     private static OrderIntentBatch copyOf(OrderIntentBatch batch) {
         return new OrderIntentBatch(
                 batch.batchId(),
                 batch.botId(),
+                batch.partitionId(),
+                batch.sourceEventId(),
                 batch.evaluationId(),
-                batch.sourceCandidateBatchId(),
-                batch.requestFingerprint(),
+                batch.inputStateHash(),
+                batch.conflictPolicyHash(),
+                batch.compositionRulesVersion(),
+                batch.resultHash(),
+                batch.finalizedAt(),
                 batch.intents());
     }
 

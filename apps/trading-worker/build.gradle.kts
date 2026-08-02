@@ -46,6 +46,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter")
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    // The pinned canonical baseline. Stores are being migrated to the canonical schema one at a
+    // time, so this app's tests need both it and the private compatibility migrations standing.
+    testImplementation(testFixtures(project(":modules:trading-persistence")))
     testImplementation("org.springframework.boot:spring-boot-starter-flyway")
     testImplementation("com.fasterxml.jackson.core:jackson-databind")
     testImplementation("org.flywaydb:flyway-database-postgresql")
