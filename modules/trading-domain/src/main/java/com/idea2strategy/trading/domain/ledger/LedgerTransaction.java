@@ -118,20 +118,39 @@ public record LedgerTransaction(
         }
     }
 
+    /**
+     * The currency this whole posting is denominated in.
+     *
+     * <p>{@code trading.ledger_transactions.currency_code} is a single NOT NULL header currency and
+     * {@code trading.ledger_entries} carries none of its own, so a posting has exactly one.
+     */
+    public String currency() {
+        return entries.getFirst().currency();
+    }
+
+    /**
+     * One currency, debits equal to credits.
+     *
+     * <p>A multi currency posting used to be legal here and balanced per currency. The canonical
+     * ledger cannot record one: the header names a single currency and the deferred balance trigger
+     * sums one signed total across every entry of a transaction, so the halves of a two currency
+     * posting would have to net to zero against each other. Splitting such a posting into one
+     * transaction per currency is a decision for the caller that raises it, not something this
+     * record can make on its behalf, so it is refused rather than silently split.
+     */
     private static void validateBalanced(List<LedgerEntry> entries) {
-        Map<String, BigDecimal> debits = new HashMap<>();
-        Map<String, BigDecimal> credits = new HashMap<>();
+        Set<String> currencies = new HashSet<>();
+        Map<LedgerDirection, BigDecimal> totals = new HashMap<>();
         for (LedgerEntry entry : entries) {
-            (entry.direction() == LedgerDirection.DEBIT ? debits : credits)
-                    .merge(entry.currency(), entry.amount(), BigDecimal::add);
+            currencies.add(entry.currency());
+            totals.merge(entry.direction(), entry.amount(), BigDecimal::add);
         }
-        Set<String> currencies = new HashSet<>(debits.keySet());
-        currencies.addAll(credits.keySet());
-        for (String currency : currencies) {
-            if (debits.getOrDefault(currency, BigDecimal.ZERO)
-                    .compareTo(credits.getOrDefault(currency, BigDecimal.ZERO)) != 0) {
-                throw new IllegalArgumentException("ledger transaction must be balanced by currency");
-            }
+        if (currencies.size() != 1) {
+            throw new IllegalArgumentException("ledger transaction must be denominated in one currency");
+        }
+        if (totals.getOrDefault(LedgerDirection.DEBIT, BigDecimal.ZERO)
+                .compareTo(totals.getOrDefault(LedgerDirection.CREDIT, BigDecimal.ZERO)) != 0) {
+            throw new IllegalArgumentException("ledger transaction must be balanced by currency");
         }
     }
 

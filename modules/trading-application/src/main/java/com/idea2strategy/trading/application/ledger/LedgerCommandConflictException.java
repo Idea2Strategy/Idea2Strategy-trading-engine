@@ -4,4 +4,8 @@ public final class LedgerCommandConflictException extends RuntimeException {
     public LedgerCommandConflictException(String message) {
         super(message);
     }
+
+    public LedgerCommandConflictException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }
