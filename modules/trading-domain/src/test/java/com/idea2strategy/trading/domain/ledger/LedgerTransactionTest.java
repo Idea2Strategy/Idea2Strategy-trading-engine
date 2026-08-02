@@ -44,6 +44,37 @@ class LedgerTransactionTest {
                 () -> LedgerEntryDraft.debit("SECURITY", "usd", BigDecimal.ONE));
     }
 
+    /**
+     * The canonical header names one currency and the deferred balance trigger sums a single signed
+     * total over every entry of a transaction, so a posting that balances per currency but spans two
+     * of them has no canonical form even though it is sound bookkeeping.
+     */
+    @Test
+    void rejectsAPostingThatSpansTwoCurrenciesEvenWhenEachSideBalances() {
+        assertThrows(IllegalArgumentException.class, () -> LedgerTransaction.standard(SOURCE, POSTED_AT, List.of(
+                LedgerEntryDraft.debit("SECURITY", "USD", BigDecimal.ONE),
+                LedgerEntryDraft.credit("CASH", "USD", BigDecimal.ONE),
+                LedgerEntryDraft.debit("SECURITY", "KRW", new BigDecimal("1300")),
+                LedgerEntryDraft.credit("CASH", "KRW", new BigDecimal("1300")))));
+    }
+
+    /**
+     * {@code trading.ledger_entries.amount} is {@code numeric(24,8)} and
+     * {@code trading.ledger_accounts.account_type} is {@code varchar(50)}. A value the ledger cannot
+     * hold is refused here rather than rounded by PostgreSQL into something the posting never meant.
+     */
+    @Test
+    void rejectsWhatTheCanonicalLedgerColumnsCannotHold() {
+        assertEquals(new BigDecimal("0.00000001"),
+                LedgerEntryDraft.debit("CASH", "USD", new BigDecimal("0.00000001")).amount());
+        assertThrows(IllegalArgumentException.class,
+                () -> LedgerEntryDraft.debit("CASH", "USD", new BigDecimal("0.000000001")));
+        assertThrows(IllegalArgumentException.class,
+                () -> LedgerEntryDraft.debit("CASH", "USD", new BigDecimal("1".repeat(17))));
+        assertThrows(IllegalArgumentException.class,
+                () -> LedgerEntryDraft.debit("A".repeat(51), "USD", BigDecimal.ONE));
+    }
+
     @Test
     void reversalIsAnOppositeAppendOnlyTransactionWithStableLineage() {
         var original = LedgerTransaction.standard(SOURCE, POSTED_AT, List.of(
