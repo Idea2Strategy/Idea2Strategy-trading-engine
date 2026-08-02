@@ -15,17 +15,31 @@ public final class StartupWarmupCoordinator {
 
     private final WarmupDataSource source;
     private final String expectedManifestSchemaVersion;
-    private final String expectedObjectSchemaVersion;
+    private final Set<String> expectedObjectSchemaVersions;
 
     public StartupWarmupCoordinator(
             WarmupDataSource source,
             String expectedManifestSchemaVersion,
             String expectedObjectSchemaVersion) {
+        this(source, expectedManifestSchemaVersion, Set.of(expectedObjectSchemaVersion));
+    }
+
+    public StartupWarmupCoordinator(
+            WarmupDataSource source,
+            String expectedManifestSchemaVersion,
+            Set<String> expectedObjectSchemaVersions) {
         this.source = Objects.requireNonNull(source, "source");
         this.expectedManifestSchemaVersion = WarmupValueValidation.requireText(
                 expectedManifestSchemaVersion, "expectedManifestSchemaVersion");
-        this.expectedObjectSchemaVersion = WarmupValueValidation.requireText(
-                expectedObjectSchemaVersion, "expectedObjectSchemaVersion");
+        expectedObjectSchemaVersions = Set.copyOf(Objects.requireNonNull(
+                expectedObjectSchemaVersions, "expectedObjectSchemaVersions"));
+        if (expectedObjectSchemaVersions.isEmpty()) {
+            throw new IllegalArgumentException("expectedObjectSchemaVersions must not be empty");
+        }
+        if (expectedObjectSchemaVersions.stream().anyMatch(value -> value == null || value.isBlank())) {
+            throw new IllegalArgumentException("expectedObjectSchemaVersions must contain non-blank values");
+        }
+        this.expectedObjectSchemaVersions = expectedObjectSchemaVersions;
     }
 
     public PreparedWarmup prepare(WarmupRequest request) {
@@ -58,7 +72,7 @@ public final class StartupWarmupCoordinator {
                     manifest.schemaVersion() + " != " + expectedManifestSchemaVersion);
         }
         for (DatasetObjectSnapshot object : manifest.objects()) {
-            if (!object.schemaVersion().equals(expectedObjectSchemaVersion)) {
+            if (!expectedObjectSchemaVersions.contains(object.schemaVersion())) {
                 throw failure(WarmupFailure.MANIFEST_OBJECT_SCHEMA_MISMATCH, object.objectKey());
             }
             if (!object.declaredContentSha256().equals(object.observedContentSha256())) {

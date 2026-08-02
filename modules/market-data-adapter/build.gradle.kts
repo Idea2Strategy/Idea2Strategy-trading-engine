@@ -4,6 +4,7 @@ plugins {
 
 dependencies {
     implementation(project(":modules:trading-messaging"))
+    implementation(project(":modules:strategy-runtime"))
     implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
     implementation("com.fasterxml.jackson.core:jackson-databind")
     implementation("io.lettuce:lettuce-core")
