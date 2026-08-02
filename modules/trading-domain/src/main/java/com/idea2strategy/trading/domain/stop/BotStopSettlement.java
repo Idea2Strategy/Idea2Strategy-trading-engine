@@ -1,6 +1,5 @@
 package com.idea2strategy.trading.domain.stop;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -113,21 +112,7 @@ public record BotStopSettlement(
     }
 
     private static UUID uuid5(UUID namespace, String value) {
-        byte[] namespaceBytes = new byte[16];
-        java.nio.ByteBuffer.wrap(namespaceBytes)
-                .putLong(namespace.getMostSignificantBits())
-                .putLong(namespace.getLeastSignificantBits());
-        try {
-            var digest = java.security.MessageDigest.getInstance("SHA-1");
-            digest.update(namespaceBytes);
-            byte[] hash = digest.digest(value.getBytes(StandardCharsets.UTF_8));
-            hash[6] = (byte) ((hash[6] & 0x0f) | 0x50);
-            hash[8] = (byte) ((hash[8] & 0x3f) | 0x80);
-            var buffer = java.nio.ByteBuffer.wrap(hash);
-            return new UUID(buffer.getLong(), buffer.getLong());
-        } catch (java.security.NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-1 unavailable", exception);
-        }
+        return StopIdentity.uuid5(namespace, value);
     }
 
     private static String nonBlank(String value, String name) {
