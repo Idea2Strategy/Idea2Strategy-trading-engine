@@ -2,172 +2,237 @@ package com.idea2strategy.trading.domain.reservation;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
+import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * A reserved resource, as canonical {@code trading.resource_reservations} records it.
+ *
+ * <p><strong>A canonical reservation belongs to an intent, not to an order.</strong> Buying power is
+ * committed when the intent is approved, which is before any order exists, so
+ * {@code resource_reservations.intent_id} is the owner and the private schema's {@code order_id} has
+ * no place here. The order only enters later, through {@link ReservationComponentLink} and canonical
+ * {@code order_component_reservations}, once the intent has actually been composed into an order.
+ *
+ * <p>The state machine is unchanged — {@code ACTIVE}, {@code SETTLED}, {@code RELEASED}, consumption
+ * and release monotone and conserving — but each transition now names the canonical event it
+ * produces, because {@code assert_reservation_event_totals} rebuilds these totals from
+ * {@code reservation_events} and refuses any projection the events do not explain.
+ *
+ * <p>Two private fields are gone rather than ported. {@code createCommandId} and
+ * {@code requestFingerprint} existed to drive a private receipt table; canonical already makes
+ * {@code (intent_id, reservation_key)} and {@code (reservation_id, event_key)} unique and carries an
+ * {@code event_hash} on every event, so idempotency and divergence detection are native. The
+ * free-text {@code terminalReason} becomes {@link ReservationReleaseCause}, which is the only form
+ * canonical can store.
+ */
 public record ResourceReservation(
         UUID reservationId,
-        UUID createCommandId,
-        String requestFingerprint,
-        UUID orderId,
+        UUID intentId,
         ReservationResourceType resourceType,
-        String resourceKey,
+        String currencyCode,
+        UUID instrumentId,
         BigDecimal reserved,
         BigDecimal consumed,
         BigDecimal released,
         ReservationStatus status,
-        long version,
+        ReservationReleaseCause releaseCause,
+        long lastEventSequence,
         Instant createdAt,
         Instant updatedAt,
-        String terminalReason,
         List<LotReservationAllocation> lotAllocations) {
 
+    /** Canonical {@code reservation_events.reservation_sequence} of the {@code CREATED} event. */
+    public static final long CREATED_SEQUENCE = 1L;
+
     public ResourceReservation {
-        reservationId = required(reservationId, "reservationId");
-        createCommandId = required(createCommandId, "createCommandId");
-        requestFingerprint = nonBlank(requestFingerprint, "requestFingerprint");
-        orderId = required(orderId, "orderId");
-        resourceType = required(resourceType, "resourceType");
-        resourceKey = nonBlank(resourceKey, "resourceKey");
-        reserved = positive(reserved, "reserved");
-        consumed = nonNegative(consumed, "consumed");
-        released = nonNegative(released, "released");
-        status = required(status, "status");
-        if (consumed.add(released).compareTo(reserved) > 0) {
-            throw new IllegalArgumentException("consumed and released value exceeds reserved value");
-        }
-        if (version < 1) {
-            throw new IllegalArgumentException("version must be positive");
-        }
-        createdAt = required(createdAt, "createdAt");
-        updatedAt = required(updatedAt, "updatedAt");
+        intentId = ReservationValues.required(intentId, "intentId");
+        resourceType = ReservationValues.required(resourceType, "resourceType");
+        currencyCode = currencyCode == null
+                ? null
+                : ReservationValues.currencyCode(currencyCode, "currencyCode");
+        reserved = ReservationValues.positive(reserved, "reserved");
+        consumed = ReservationValues.nonNegative(consumed, "consumed");
+        released = ReservationValues.nonNegative(released, "released");
+        status = ReservationValues.required(status, "status");
+        createdAt = ReservationValues.required(createdAt, "createdAt");
+        updatedAt = ReservationValues.required(updatedAt, "updatedAt");
+        lotAllocations = normalize(lotAllocations);
+
         if (updatedAt.isBefore(createdAt)) {
             throw new IllegalArgumentException("updatedAt must not precede createdAt");
         }
-        lotAllocations = normalizedAllocations(lotAllocations);
-        validateShape(resourceType, resourceKey, reserved, consumed, released, status, version,
-                createdAt, updatedAt, terminalReason, lotAllocations);
-        validateIdentity(reservationId, createCommandId, requestFingerprint, orderId, resourceType,
-                resourceKey, reserved, createdAt, lotAllocations, version);
-    }
-
-    public static ResourceReservation cash(UUID orderId, String currencyCode, BigDecimal amount, Instant createdAt) {
-        String resourceKey = nonBlank(currencyCode, "currencyCode").toUpperCase(Locale.ROOT);
-        if (!resourceKey.matches("[A-Z]{3}")) {
-            throw new IllegalArgumentException("currencyCode must be an ISO-like three-letter code");
+        if (lastEventSequence < CREATED_SEQUENCE) {
+            throw new IllegalArgumentException("lastEventSequence must be positive");
         }
-        return initial(orderId, ReservationResourceType.CASH_BUYING_POWER, resourceKey, amount, List.of(), createdAt);
+        // Canonical reservation_amount_not_exceeded / reservation_quantity_not_exceeded.
+        if (consumed.add(released).compareTo(reserved) > 0) {
+            throw new IllegalArgumentException("consumed and released exceed the reserved measure");
+        }
+        requireEvidence(resourceType, currencyCode, instrumentId, reserved, lotAllocations);
+        requireStatusShape(status, releaseCause, reserved, consumed, released);
+        if (lastEventSequence == CREATED_SEQUENCE
+                && (status != ReservationStatus.ACTIVE || consumed.signum() != 0
+                        || released.signum() != 0 || !updatedAt.equals(createdAt))) {
+            throw new IllegalArgumentException("sequence one must be the reservation as created");
+        }
+
+        UUID derived = ReservationIdentity.reservationId(
+                intentId, key(resourceType, currencyCode, instrumentId));
+        if (reservationId == null) {
+            reservationId = derived;
+        } else if (!reservationId.equals(derived)) {
+            throw new IllegalArgumentException("reservationId does not match the reservation key");
+        }
     }
 
-    public static ResourceReservation position(
-            UUID orderId,
+    /** Buying power committed against an approved intent, in one currency. */
+    public static ResourceReservation cash(
+            UUID intentId, String currencyCode, BigDecimal amount, Instant createdAt) {
+        return initial(
+                intentId, ReservationResourceType.CASH_BUYING_POWER,
+                ReservationValues.currencyCode(currencyCode, "currencyCode"), null, amount,
+                List.of(), createdAt);
+    }
+
+    /** Instrument quantity locked against the FIFO lots that will supply it. */
+    public static ResourceReservation positionQuantity(
+            UUID intentId,
             UUID instrumentId,
             BigDecimal quantity,
-            List<LotReservationAllocation> allocations,
+            List<LotReservationAllocation> lotAllocations,
             Instant createdAt) {
-        return initial(orderId, ReservationResourceType.POSITION_QUANTITY,
-                required(instrumentId, "instrumentId").toString(), quantity, allocations, createdAt);
+        return initial(
+                intentId, ReservationResourceType.POSITION_QUANTITY, null, instrumentId, quantity,
+                lotAllocations, createdAt);
+    }
+
+    /** Cash posted as collateral for a short sale of one instrument. */
+    public static ResourceReservation shortCollateral(
+            UUID intentId,
+            String currencyCode,
+            UUID instrumentId,
+            BigDecimal amount,
+            Instant createdAt) {
+        return initial(
+                intentId, ReservationResourceType.SHORT_COLLATERAL_CASH,
+                ReservationValues.currencyCode(currencyCode, "currencyCode"), instrumentId, amount,
+                List.of(), createdAt);
     }
 
     private static ResourceReservation initial(
-            UUID orderId,
-            ReservationResourceType type,
-            String resourceKey,
+            UUID intentId,
+            ReservationResourceType resourceType,
+            String currencyCode,
+            UUID instrumentId,
             BigDecimal reserved,
-            List<LotReservationAllocation> allocations,
+            List<LotReservationAllocation> lotAllocations,
             Instant createdAt) {
-        UUID requiredOrderId = required(orderId, "orderId");
-        BigDecimal normalizedReserved = positive(reserved, "reserved");
-        Instant requiredCreatedAt = required(createdAt, "createdAt");
-        List<LotReservationAllocation> normalizedAllocations = normalizedAllocations(allocations);
-        UUID id = ReservationIdentity.reservationId(requiredOrderId, type, resourceKey);
-        return new ResourceReservation(id, ReservationIdentity.createCommandId(id),
-                ReservationIdentity.fingerprint(requiredOrderId, type, resourceKey, normalizedReserved,
-                        normalizedAllocations, requiredCreatedAt),
-                requiredOrderId, type, resourceKey, normalizedReserved, BigDecimal.ZERO, BigDecimal.ZERO,
-                ReservationStatus.ACTIVE, 1, requiredCreatedAt, requiredCreatedAt, null, normalizedAllocations);
+        return new ResourceReservation(
+                null, intentId, resourceType, currencyCode, instrumentId, reserved,
+                ReservationValues.zero(), ReservationValues.zero(), ReservationStatus.ACTIVE, null,
+                CREATED_SEQUENCE, createdAt, createdAt, lotAllocations);
+    }
+
+    /**
+     * Canonical {@code reservation_key}: the normalised, never-null idempotency key that makes one
+     * intent unable to reserve the same resource twice.
+     */
+    public String reservationKey() {
+        return key(resourceType, currencyCode, instrumentId);
+    }
+
+    /** Whether the reserved measure is money rather than instrument quantity. */
+    public boolean measuredInAmount() {
+        return resourceType.measuredInAmount();
     }
 
     public BigDecimal remaining() {
-        return reserved.subtract(consumed).subtract(released).stripTrailingZeros();
+        return reserved.subtract(consumed).subtract(released);
     }
 
-    public ResourceReservation consume(BigDecimal value, Instant occurredAt) {
+    public Optional<ReservationReleaseCause> cause() {
+        return Optional.ofNullable(releaseCause);
+    }
+
+    /**
+     * One partial fill draws on the reservation and leaves it open for the rest of the order.
+     *
+     * <p>Canonical {@code partial_fill_consumption_stays_active} forces {@code status_after} to be
+     * {@code ACTIVE} and {@code active_reservation_not_released} keeps the released total at zero
+     * while it is, so the fill that exhausts the reservation is {@link #settleByFill} instead.
+     */
+    public ReservationTransition consumeByFill(BigDecimal amount, Instant occurredAt) {
         requireActive();
-        BigDecimal delta = positive(value, "value");
-        if (delta.compareTo(remaining()) > 0) {
-            throw new IllegalArgumentException("consumption exceeds remaining reservation");
+        BigDecimal delta = ReservationValues.positive(amount, "amount");
+        if (delta.compareTo(remaining()) >= 0) {
+            throw new IllegalArgumentException(
+                    "a partial consumption must leave the reservation open; settle it instead");
         }
-        Instant transitionAt = transitionTime(occurredAt);
-        List<LotReservationAllocation> allocations = resourceType == ReservationResourceType.POSITION_QUANTITY
-                ? consumeLots(delta)
-                : lotAllocations;
-        BigDecimal nextConsumed = consumed.add(delta).stripTrailingZeros();
-        ReservationStatus nextStatus = nextConsumed.add(released).compareTo(reserved) == 0
-                ? ReservationStatus.SETTLED
-                : ReservationStatus.ACTIVE;
-        return copy(nextConsumed, released, nextStatus, transitionAt, null, allocations);
+        return new ReservationTransition(
+                next(consumed.add(delta), released, ReservationStatus.ACTIVE, null, occurredAt),
+                ReservationEventType.CONSUMED_BY_FILL, delta, ReservationValues.zero(), occurredAt);
     }
 
-    public ResourceReservation resize(
-            BigDecimal targetReserved,
-            List<LotReservationAllocation> targetLotAllocations,
-            Instant occurredAt) {
+    /**
+     * The fill that finishes the order consumes what it actually used and hands back the rest.
+     *
+     * <p>Canonical records both halves on the single {@code SETTLED_BY_FILL} event, because
+     * {@code reservation_amount_final_conservation} demands that a reservation which is no longer
+     * {@code ACTIVE} has consumed plus released equal to what it reserved, and no release event type
+     * describes an order that simply filled. The remainder is the buying-power buffer and the
+     * difference between the estimated and the charged fee.
+     */
+    public ReservationTransition settleByFill(BigDecimal amount, Instant occurredAt) {
         requireActive();
-        BigDecimal target = positive(targetReserved, "targetReserved");
-        if (target.compareTo(consumed.add(released)) <= 0) {
-            throw new IllegalArgumentException("targetReserved must retain a positive unconsumed balance");
+        BigDecimal delta = ReservationValues.positive(amount, "amount");
+        BigDecimal remaining = remaining();
+        if (delta.compareTo(remaining) > 0) {
+            throw new IllegalArgumentException("settlement exceeds the remaining reservation");
         }
-        if (target.compareTo(reserved) == 0) {
-            throw new IllegalArgumentException("targetReserved must change the reservation");
-        }
-        List<LotReservationAllocation> allocations = resourceType == ReservationResourceType.CASH_BUYING_POWER
-                ? List.of()
-                : normalizedAllocations(targetLotAllocations);
-        return new ResourceReservation(reservationId, createCommandId, requestFingerprint, orderId, resourceType,
-                resourceKey, target, consumed, released, ReservationStatus.ACTIVE, version + 1,
-                createdAt, transitionTime(occurredAt), null, allocations);
+        BigDecimal releasedDelta = remaining.subtract(delta);
+        return new ReservationTransition(
+                next(consumed.add(delta), released.add(releasedDelta), ReservationStatus.SETTLED,
+                        null, occurredAt),
+                ReservationEventType.SETTLED_BY_FILL, delta, releasedDelta, occurredAt);
     }
 
-    public ResourceReservation releaseRemaining(Instant occurredAt, String reason) {
+    /**
+     * The reservation is given back because the intent will not be filled, or not as reserved.
+     *
+     * <p>Canonical {@code released_reservation_has_no_consumption} reserves {@code RELEASED} for a
+     * reservation nothing ever drew on. A release after a partial fill ends {@code SETTLED} instead,
+     * which is exactly what {@code release_event_status_valid} was widened to allow when partial
+     * consumption became legal.
+     */
+    public ReservationTransition release(ReservationReleaseCause cause, Instant occurredAt) {
         requireActive();
-        Instant transitionAt = transitionTime(occurredAt);
-        String releaseReason = nonBlank(reason, "reason");
-        BigDecimal nextReleased = released.add(remaining()).stripTrailingZeros();
-        List<LotReservationAllocation> allocations = resourceType == ReservationResourceType.POSITION_QUANTITY
-                ? lotAllocations.stream().map(LotReservationAllocation::releaseRemaining).toList()
-                : lotAllocations;
-        ReservationStatus nextStatus = consumed.signum() == 0 ? ReservationStatus.RELEASED : ReservationStatus.SETTLED;
-        return copy(consumed, nextReleased, nextStatus, transitionAt, releaseReason, allocations);
+        ReservationValues.required(cause, "cause");
+        BigDecimal releasedDelta = remaining();
+        ReservationStatus nextStatus = consumed.signum() == 0
+                ? ReservationStatus.RELEASED
+                : ReservationStatus.SETTLED;
+        return new ReservationTransition(
+                next(consumed, released.add(releasedDelta), nextStatus, cause, occurredAt),
+                cause.eventType(), ReservationValues.zero(), releasedDelta, occurredAt);
     }
 
-    private ResourceReservation copy(
+    private ResourceReservation next(
             BigDecimal nextConsumed,
             BigDecimal nextReleased,
             ReservationStatus nextStatus,
-            Instant transitionAt,
-            String reason,
-            List<LotReservationAllocation> allocations) {
-        return new ResourceReservation(reservationId, createCommandId, requestFingerprint, orderId, resourceType,
-                resourceKey, reserved, nextConsumed, nextReleased, nextStatus, version + 1,
-                createdAt, transitionAt, reason, allocations);
-    }
-
-    private List<LotReservationAllocation> consumeLots(BigDecimal value) {
-        BigDecimal remainingToConsume = value;
-        List<LotReservationAllocation> result = new ArrayList<>(lotAllocations.size());
-        for (LotReservationAllocation allocation : lotAllocations) {
-            BigDecimal consumedHere = remainingToConsume.min(allocation.remaining());
-            result.add(consumedHere.signum() == 0 ? allocation : allocation.consume(consumedHere));
-            remainingToConsume = remainingToConsume.subtract(consumedHere);
+            ReservationReleaseCause cause,
+            Instant occurredAt) {
+        Instant at = ReservationValues.required(occurredAt, "occurredAt");
+        if (at.isBefore(updatedAt)) {
+            throw new IllegalArgumentException("occurredAt must not precede updatedAt");
         }
-        if (remainingToConsume.signum() != 0) {
-            throw new IllegalStateException("lot allocation does not cover reservation consumption");
-        }
-        return List.copyOf(result);
+        return new ResourceReservation(
+                reservationId, intentId, resourceType, currencyCode, instrumentId, reserved,
+                nextConsumed, nextReleased, nextStatus, cause, lastEventSequence + 1, createdAt, at,
+                lotAllocations);
     }
 
     private void requireActive() {
@@ -176,143 +241,87 @@ public record ResourceReservation(
         }
     }
 
-    private Instant transitionTime(Instant occurredAt) {
-        Instant value = required(occurredAt, "occurredAt");
-        if (value.isBefore(updatedAt)) {
-            throw new IllegalArgumentException("occurredAt must not precede updatedAt");
+    /** Mirrors the per-resource-type evidence canonical demands with row CHECK constraints. */
+    private static void requireEvidence(
+            ReservationResourceType resourceType,
+            String currencyCode,
+            UUID instrumentId,
+            BigDecimal reserved,
+            List<LotReservationAllocation> lotAllocations) {
+        boolean needsCurrency = resourceType.measuredInAmount();
+        boolean needsInstrument = resourceType != ReservationResourceType.CASH_BUYING_POWER;
+        if (needsCurrency != (currencyCode != null)) {
+            throw new IllegalArgumentException(resourceType + " currency evidence is wrong");
         }
-        return value;
+        if (needsInstrument != (instrumentId != null)) {
+            throw new IllegalArgumentException(resourceType + " instrument evidence is wrong");
+        }
+        if (resourceType != ReservationResourceType.POSITION_QUANTITY) {
+            if (!lotAllocations.isEmpty()) {
+                throw new IllegalArgumentException("only a quantity reservation can lock lots");
+            }
+            return;
+        }
+        BigDecimal locked = lotAllocations.stream()
+                .map(LotReservationAllocation::reservedQuantity)
+                .reduce(ReservationValues.zero(), BigDecimal::add);
+        if (locked.compareTo(reserved) != 0) {
+            throw new IllegalArgumentException("locked lot quantity must equal the reserved quantity");
+        }
     }
 
-    private static void validateShape(
-            ReservationResourceType type,
-            String resourceKey,
+    /** Mirrors the canonical status CHECK constraints on {@code resource_reservations}. */
+    private static void requireStatusShape(
+            ReservationStatus status,
+            ReservationReleaseCause cause,
             BigDecimal reserved,
             BigDecimal consumed,
-            BigDecimal released,
-            ReservationStatus status,
-            long version,
-            Instant createdAt,
-            Instant updatedAt,
-            String reason,
-            List<LotReservationAllocation> allocations) {
-        if (type == ReservationResourceType.CASH_BUYING_POWER && !allocations.isEmpty()) {
-            throw new IllegalArgumentException("cash reservation cannot contain lot allocations");
-        }
-        if (type == ReservationResourceType.POSITION_QUANTITY) {
-            BigDecimal totalReserved = allocations.stream()
-                    .map(LotReservationAllocation::reserved)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal totalConsumed = allocations.stream()
-                    .map(LotReservationAllocation::consumed)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal totalReleased = allocations.stream()
-                    .map(LotReservationAllocation::released)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-            if (totalReserved.compareTo(reserved) != 0
-                    || totalConsumed.compareTo(consumed) != 0
-                    || totalReleased.compareTo(released) != 0) {
-                throw new IllegalArgumentException("lot allocation total must match reservation totals");
-            }
-            UUID.fromString(resourceKey);
-        }
+            BigDecimal released) {
         BigDecimal resolved = consumed.add(released);
         switch (status) {
             case ACTIVE -> {
-                if (resolved.compareTo(reserved) >= 0 || reason != null) {
-                    throw new IllegalArgumentException("ACTIVE reservation must retain an unsettled balance without reason");
+                // active_reservation_not_released, plus the domain's own rule that a reservation
+                // whose measure is spent is settled rather than left open.
+                if (released.signum() != 0 || resolved.compareTo(reserved) >= 0 || cause != null) {
+                    throw new IllegalArgumentException(
+                            "an ACTIVE reservation keeps an unreleased balance and no cause");
                 }
             }
             case SETTLED -> {
                 if (resolved.compareTo(reserved) != 0 || consumed.signum() <= 0) {
-                    throw new IllegalArgumentException("SETTLED reservation must fully resolve with consumption");
+                    throw new IllegalArgumentException(
+                            "a SETTLED reservation is fully resolved and has consumption");
                 }
             }
             case RELEASED -> {
-                if (released.compareTo(reserved) != 0 || consumed.signum() != 0 || reason == null) {
-                    throw new IllegalArgumentException("RELEASED reservation must release the full unused balance");
+                if (released.compareTo(reserved) != 0 || consumed.signum() != 0 || cause == null) {
+                    throw new IllegalArgumentException(
+                            "a RELEASED reservation gave everything back and names a cause");
                 }
             }
         }
-        if (version == 1 && (status != ReservationStatus.ACTIVE || consumed.signum() != 0
-                || released.signum() != 0 || !updatedAt.equals(createdAt))) {
-            throw new IllegalArgumentException("version one must be the initial ACTIVE reservation");
-        }
-        if (version > 1 && updatedAt.isBefore(createdAt)) {
-            throw new IllegalArgumentException("updatedAt must not precede createdAt");
-        }
     }
 
-    private static void validateIdentity(
-            UUID reservationId,
-            UUID createCommandId,
-            String fingerprint,
-            UUID orderId,
-            ReservationResourceType type,
-            String resourceKey,
-            BigDecimal reserved,
-            Instant createdAt,
-            List<LotReservationAllocation> allocations,
-            long version) {
-        UUID expectedId = ReservationIdentity.reservationId(orderId, type, resourceKey);
-        if (!expectedId.equals(reservationId)) {
-            throw new IllegalArgumentException("reservationId does not match reservation identity");
-        }
-        if (!ReservationIdentity.createCommandId(expectedId).equals(createCommandId)) {
-            throw new IllegalArgumentException("createCommandId does not match reservationId");
-        }
-        if (version > 1) {
-            return;
-        }
-        String expectedFingerprint = ReservationIdentity.fingerprint(orderId, type, resourceKey, reserved,
-                allocations.stream()
-                        .map(allocation -> new LotReservationAllocation(allocation.lotId(), allocation.openedAt(),
-                                allocation.reserved(), BigDecimal.ZERO, BigDecimal.ZERO))
-                        .toList(),
-                createdAt);
-        if (!expectedFingerprint.equals(fingerprint)) {
-            throw new IllegalArgumentException("requestFingerprint does not match initial reservation");
-        }
+    private static String key(
+            ReservationResourceType resourceType, String currencyCode, UUID instrumentId) {
+        return switch (resourceType) {
+            case CASH_BUYING_POWER -> resourceType.name() + ":" + currencyCode;
+            case POSITION_QUANTITY -> resourceType.name() + ":" + instrumentId;
+            case SHORT_COLLATERAL_CASH ->
+                    resourceType.name() + ":" + currencyCode + ":" + instrumentId;
+        };
     }
 
-    private static List<LotReservationAllocation> normalizedAllocations(List<LotReservationAllocation> allocations) {
-        List<LotReservationAllocation> values = allocations == null ? List.of() : List.copyOf(allocations);
+    private static List<LotReservationAllocation> normalize(
+            List<LotReservationAllocation> lotAllocations) {
+        List<LotReservationAllocation> values =
+                lotAllocations == null ? List.of() : List.copyOf(lotAllocations);
         if (values.stream().map(LotReservationAllocation::lotId).distinct().count() != values.size()) {
-            throw new IllegalArgumentException("lot allocations must have unique lot IDs");
+            throw new IllegalArgumentException("a lot may back a reservation only once");
         }
         return values.stream()
                 .sorted(Comparator.comparing(LotReservationAllocation::openedAt)
                         .thenComparing(allocation -> allocation.lotId().toString()))
                 .toList();
-    }
-
-    private static BigDecimal positive(BigDecimal value, String name) {
-        BigDecimal normalized = nonNegative(value, name);
-        if (normalized.signum() <= 0) {
-            throw new IllegalArgumentException(name + " must be positive");
-        }
-        return normalized;
-    }
-
-    private static BigDecimal nonNegative(BigDecimal value, String name) {
-        BigDecimal normalized = required(value, name).stripTrailingZeros();
-        if (normalized.signum() < 0) {
-            throw new IllegalArgumentException(name + " must not be negative");
-        }
-        return normalized;
-    }
-
-    private static String nonBlank(String value, String name) {
-        if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(name + " must not be blank");
-        }
-        return value;
-    }
-
-    private static <T> T required(T value, String name) {
-        if (value == null) {
-            throw new IllegalArgumentException(name + " must not be null");
-        }
-        return value;
     }
 }
