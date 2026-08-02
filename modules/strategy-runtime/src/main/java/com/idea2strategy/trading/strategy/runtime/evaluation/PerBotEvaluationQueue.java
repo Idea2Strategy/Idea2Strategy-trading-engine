@@ -1,5 +1,6 @@
 package com.idea2strategy.trading.strategy.runtime.evaluation;
 
+import com.idea2strategy.trading.strategy.runtime.control.BotEvaluationGate;
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.Map;
@@ -18,16 +19,24 @@ import java.util.function.Supplier;
 public final class PerBotEvaluationQueue implements AutoCloseable {
     private final Object monitor = new Object();
     private final Executor executor;
+    private final BotEvaluationGate evaluationGate;
     private final Map<UUID, ArrayDeque<QueuedEvaluation<?>>> lanes = new HashMap<>();
     private boolean accepting = true;
 
     public PerBotEvaluationQueue(Executor executor) {
+        this(executor, ignored -> {
+        });
+    }
+
+    public PerBotEvaluationQueue(Executor executor, BotEvaluationGate evaluationGate) {
         this.executor = Objects.requireNonNull(executor, "executor must not be null");
+        this.evaluationGate = Objects.requireNonNull(evaluationGate, "evaluationGate must not be null");
     }
 
     public <T> CompletionStage<T> submit(UUID botId, Supplier<? extends T> evaluation) {
         Objects.requireNonNull(botId, "botId must not be null");
         Objects.requireNonNull(evaluation, "evaluation must not be null");
+        evaluationGate.requireEvaluationAllowed(botId);
 
         QueuedEvaluation<T> queued = new QueuedEvaluation<>(botId, evaluation);
         boolean startsLane;
