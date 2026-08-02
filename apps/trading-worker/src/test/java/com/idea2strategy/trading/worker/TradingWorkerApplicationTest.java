@@ -43,7 +43,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 @Testcontainers(disabledWithoutDocker = true)
-@SpringBootTest(properties = "trading.fake-candidate.enabled=true")
+@SpringBootTest(properties = {
+        "trading.fake-candidate.enabled=true",
+        "spring.flyway.enabled=true"
+})
 class TradingWorkerApplicationTest {
     private static final String FAKE_BATCH_ID = "81000000-0000-0000-0000-000000000001";
 

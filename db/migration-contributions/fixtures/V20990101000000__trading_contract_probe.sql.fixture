@@ -1,0 +1,2 @@
+-- Test-only filename probe. This file must never enter a Flyway migration location.
+create table trading.fixture_that_must_never_run (id uuid primary key);
