@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "batchId": "d4190e9c-2794-4c37-9361-f5f9164cc59e",
+  "evaluationId": "626825b7-9de7-447a-a775-d8840fd24e55",
+  "botId": "e332fd66-3a21-4d3e-8a2a-4c2e4ee55430",
+  "partitionId": "1f0a5b6c-8d2e-4a71-9c33-2b5e7d901aa4",
+  "sourceEventId": "7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f",
+  "createdAt": "2026-07-31T14:30:00.200Z",
+  "candidates": [
+    {
+      "candidateId": "35c2d356-b7a3-43b4-80c3-fd7cad84cdcd",
+      "instrumentId": "8a35e6b5-cf84-4f63-920d-57c1f1b95df0",
+      "flowId": "9b8a7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+      "side": "BUY",
+      "quantity": 2,
+      "limitPrice": 210.12,
+      "reasonCodes": ["BASIC_RULE_MATCHED", "EQUAL_ALLOCATION"]
+    }
+  ]
+}
