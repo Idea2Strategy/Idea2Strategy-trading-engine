@@ -18,14 +18,21 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
+@Testcontainers(disabledWithoutDocker = true)
 @SpringBootTest(properties = "trading.fake-candidate.enabled=true")
 class VirtualFillWorkerIntegrationTest {
+    @Container
+    private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
+
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", () -> required("F08_POSTGRES_URL"));
-        registry.add("spring.datasource.username", () -> System.getenv().getOrDefault("F08_POSTGRES_USER", "postgres"));
-        registry.add("spring.datasource.password", () -> System.getenv().getOrDefault("F08_POSTGRES_PASSWORD", "postgres"));
+        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        registry.add("spring.datasource.username", POSTGRES::getUsername);
+        registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
 
     @Autowired VirtualFillService service;
@@ -52,9 +59,4 @@ class VirtualFillWorkerIntegrationTest {
         assertEquals(first, query.findById(first.decisionId()).orElseThrow());
     }
 
-    private static String required(String name) {
-        String value = System.getenv(name);
-        if (value == null || value.isBlank()) throw new IllegalStateException(name + " is required");
-        return value;
-    }
 }
