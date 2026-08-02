@@ -7,6 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.idea2strategy.trading.domain.eligibility.OrderPositionEffect;
+import com.idea2strategy.trading.domain.order.OrderSide;
+import com.idea2strategy.trading.domain.order.OrderType;
+import com.idea2strategy.trading.domain.order.TimeInForce;
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -19,190 +25,218 @@ class OrderIntentBatchFactoryTest {
 
     @Test
     void createsTheSameDurableAggregateForEquivalentCandidateOrders() {
-        OrderIntentBatch forward = factory.create(request(List.of(candidateOne(), candidateTwo())));
-        OrderIntentBatch reverse = factory.create(request(List.of(candidateTwo(), candidateOne())));
+        OrderIntentBatch forward = factory.create(request(List.of(approved(ONE), approved(TWO))));
+        OrderIntentBatch reverse = factory.create(request(List.of(approved(TWO), approved(ONE))));
 
         assertAll(
                 () -> assertEquals(forward, reverse),
-                () -> assertEquals(List.of(candidateOne(), candidateTwo()),
-                        forward.intents().stream().map(OrderIntentIdentity::candidateId).toList()),
-                () -> assertTrue(forward.requestFingerprint().matches("[0-9a-f]{64}")),
+                () -> assertEquals(
+                        List.of(ONE, TWO),
+                        forward.intents().stream().map(OrderIntent::candidateId).toList()),
+                () -> assertTrue(forward.inputStateHash().matches("[0-9a-f]{64}")),
+                () -> assertTrue(forward.resultHash().matches("[0-9a-f]{64}")),
+                () -> assertTrue(forward.conflictPolicyHash().matches("[0-9a-f]{64}")),
                 () -> assertEquals(5, forward.batchId().version()),
                 () -> assertEquals(2, forward.batchId().variant()),
-                () -> assertTrue(forward.intents().stream().allMatch(intent -> intent.intentId().version() == 5)),
-                () -> assertTrue(forward.intents().stream().allMatch(intent -> intent.intentId().variant() == 2)));
+                () -> assertTrue(forward.intents().stream().allMatch(i -> i.intentId().version() == 5)),
+                () -> assertTrue(forward.intents().stream().allMatch(i -> i.intentId().variant() == 2)));
     }
 
+    /**
+     * The identifiers are derived from the evaluation alone, so these vectors are unchanged by the
+     * move to canonical storage. They are what a redelivery has to land on to be recognised as one.
+     */
     @Test
-    void createsTheApprovedDeterministicGoldenVector() {
-        OrderIntentBatch batch = factory.create(request(List.of(candidateTwo(), candidateOne())));
+    void createsTheApprovedDeterministicIdentityVector() {
+        OrderIntentBatch batch = factory.create(request(List.of(approved(TWO), approved(ONE))));
 
         assertAll(
-                () -> assertEquals(UUID.fromString("c57f84cb-a69c-5dc3-86d7-45cbf9136b30"), batch.batchId()),
-                () -> assertEquals(List.of(
-                        UUID.fromString("9a701646-1970-51c6-9393-12eb10d6f437"),
-                        UUID.fromString("fb7cd373-3c3d-56d0-928e-34b66123f082")),
-                        batch.intents().stream().map(OrderIntentIdentity::intentId).toList()),
-                () -> assertEquals("7650f25d161c85c668492c1550149d42ec005694cbe4e205b13c97fa746f7f8b",
-                        batch.requestFingerprint()));
+                () -> assertEquals(
+                        UUID.fromString("c57f84cb-a69c-5dc3-86d7-45cbf9136b30"), batch.batchId()),
+                () -> assertEquals(
+                        List.of(
+                                UUID.fromString("9a701646-1970-51c6-9393-12eb10d6f437"),
+                                UUID.fromString("fb7cd373-3c3d-56d0-928e-34b66123f082")),
+                        batch.intents().stream().map(OrderIntent::intentId).toList()),
+                () -> assertEquals(
+                        List.of("candidate:" + ONE, "candidate:" + TWO),
+                        batch.intents().stream().map(OrderIntent::intentKey).toList()));
     }
 
     @Test
-    void createsAnEmptyDurableAggregateForAnEmptyRequest() {
+    void createsAnEmptyDurableAggregateForAnEvaluationWithNoCandidate() {
         OrderIntentBatch batch = factory.create(request(List.of()));
 
         assertAll(
                 () -> assertTrue(batch.intents().isEmpty()),
                 () -> assertEquals(5, batch.batchId().version()),
-                () -> assertTrue(batch.requestFingerprint().matches("[0-9a-f]{64}")));
+                () -> assertTrue(batch.inputStateHash().matches("[0-9a-f]{64}")),
+                () -> assertTrue(batch.resultHash().matches("[0-9a-f]{64}")));
     }
 
     @Test
-    void derivesBatchAndIntentIdsOnlyFromTheirSpecifiedInputs() {
-        OrderIntentBatch baseline = factory.create(request(List.of(candidateOne(), candidateTwo())));
-        OrderIntentBatch changedBot = factory.create(request(
-                UUID.fromString("11111111-1111-1111-1111-111111111111"),
-                evaluationId(), sourceCandidateBatchId(), List.of(candidateOne(), candidateTwo())));
-        OrderIntentBatch changedSource = factory.create(request(
-                botId(), evaluationId(), UUID.fromString("33333333-3333-3333-3333-333333333333"),
-                List.of(candidateOne(), candidateTwo())));
-        OrderIntentBatch changedCandidates = factory.create(request(
-                botId(), evaluationId(), sourceCandidateBatchId(), List.of(candidateOne(), candidateThree())));
-        OrderIntentBatch changedEvaluation = factory.create(request(
-                botId(), UUID.fromString("22222222-2222-2222-2222-222222222222"),
-                sourceCandidateBatchId(), List.of(candidateOne(), candidateTwo())));
+    void derivesIdentityOnlyFromTheEvaluationAndCandidate() {
+        OrderIntentBatch baseline = factory.create(request(List.of(approved(ONE), approved(TWO))));
+        OrderIntentBatch changedBot = factory.create(
+                request(OTHER_BOT, PARTITION, EVENT, EVALUATION, SOURCE, List.of(approved(ONE), approved(TWO))));
+        OrderIntentBatch changedEvaluation = factory.create(
+                request(BOT, PARTITION, EVENT, OTHER_EVALUATION, SOURCE, List.of(approved(ONE), approved(TWO))));
 
         assertAll(
                 () -> assertEquals(baseline.batchId(), changedBot.batchId()),
-                () -> assertEquals(baseline.batchId(), changedSource.batchId()),
-                () -> assertEquals(baseline.batchId(), changedCandidates.batchId()),
-                () -> assertEquals(intentFor(baseline, candidateOne()), intentFor(changedBot, candidateOne())),
-                () -> assertEquals(intentFor(baseline, candidateOne()), intentFor(changedSource, candidateOne())),
-                () -> assertEquals(intentFor(baseline, candidateOne()), intentFor(changedCandidates, candidateOne())),
+                () -> assertEquals(intentFor(baseline, ONE), intentFor(changedBot, ONE)),
                 () -> assertNotEquals(baseline.batchId(), changedEvaluation.batchId()),
-                () -> assertNotEquals(intentFor(baseline, candidateOne()), intentFor(changedEvaluation, candidateOne())));
+                () -> assertNotEquals(intentFor(baseline, ONE), intentFor(changedEvaluation, ONE)));
     }
 
     @Test
-    void fingerprintsEveryRequestFieldWhileIgnoringCandidateOrder() {
-        OrderIntentBatch baseline = factory.create(request(List.of(candidateOne(), candidateTwo())));
-        OrderIntentBatch reversed = factory.create(request(List.of(candidateTwo(), candidateOne())));
-        OrderIntentBatch changedBot = factory.create(request(
-                UUID.fromString("11111111-1111-1111-1111-111111111111"),
-                evaluationId(), sourceCandidateBatchId(), List.of(candidateOne(), candidateTwo())));
-        OrderIntentBatch changedEvaluation = factory.create(request(
-                botId(), UUID.fromString("22222222-2222-2222-2222-222222222222"),
-                sourceCandidateBatchId(), List.of(candidateOne(), candidateTwo())));
-        OrderIntentBatch changedSource = factory.create(request(
-                botId(), evaluationId(), UUID.fromString("33333333-3333-3333-3333-333333333333"),
-                List.of(candidateOne(), candidateTwo())));
-        OrderIntentBatch changedCandidates = factory.create(request(
-                botId(), evaluationId(), sourceCandidateBatchId(), List.of(candidateOne(), candidateThree())));
+    void hashesEveryInputWhileIgnoringCandidateArrivalOrder() {
+        OrderIntentBatch baseline = factory.create(request(List.of(approved(ONE), approved(TWO))));
 
         assertAll(
-                () -> assertEquals(baseline.requestFingerprint(), reversed.requestFingerprint()),
-                () -> assertNotEquals(baseline.requestFingerprint(), changedBot.requestFingerprint()),
-                () -> assertNotEquals(baseline.requestFingerprint(), changedEvaluation.requestFingerprint()),
-                () -> assertNotEquals(baseline.requestFingerprint(), changedSource.requestFingerprint()),
-                () -> assertNotEquals(baseline.requestFingerprint(), changedCandidates.requestFingerprint()));
+                () -> assertEquals(
+                        baseline.inputStateHash(),
+                        factory.create(request(List.of(approved(TWO), approved(ONE)))).inputStateHash()),
+                () -> assertNotEquals(
+                        baseline.inputStateHash(),
+                        factory.create(request(OTHER_BOT, PARTITION, EVENT, EVALUATION, SOURCE,
+                                List.of(approved(ONE), approved(TWO)))).inputStateHash()),
+                () -> assertNotEquals(
+                        baseline.inputStateHash(),
+                        factory.create(request(BOT, OTHER_PARTITION, EVENT, EVALUATION, SOURCE,
+                                List.of(approved(ONE), approved(TWO)))).inputStateHash()),
+                () -> assertNotEquals(
+                        baseline.inputStateHash(),
+                        factory.create(request(BOT, PARTITION, OTHER_EVENT, EVALUATION, SOURCE,
+                                List.of(approved(ONE), approved(TWO)))).inputStateHash()),
+                () -> assertNotEquals(
+                        baseline.inputStateHash(),
+                        factory.create(request(BOT, PARTITION, EVENT, EVALUATION, OTHER_SOURCE,
+                                List.of(approved(ONE), approved(TWO)))).inputStateHash()),
+                () -> assertNotEquals(
+                        baseline.inputStateHash(),
+                        factory.create(request(List.of(approved(ONE), approved(THREE)))).inputStateHash()));
+    }
+
+    /**
+     * A batch that decided differently is different work even though its identity is unchanged. This
+     * is what stops a redelivery check from accepting a divergent decision as a replay.
+     */
+    @Test
+    void aChangedDecisionChangesTheInputAndResultHashesButNotTheIdentity() {
+        OrderIntentBatch approvedBatch = factory.create(request(List.of(approved(ONE))));
+        OrderIntentBatch rejectedBatch = factory.create(request(List.of(rejected(ONE))));
+
+        assertAll(
+                () -> assertEquals(approvedBatch.batchId(), rejectedBatch.batchId()),
+                () -> assertEquals(intentFor(approvedBatch, ONE), intentFor(rejectedBatch, ONE)),
+                () -> assertNotEquals(approvedBatch.inputStateHash(), rejectedBatch.inputStateHash()),
+                () -> assertNotEquals(approvedBatch.resultHash(), rejectedBatch.resultHash()));
     }
 
     @Test
     void requestCopiesAndSortsCandidates() {
-        ArrayList<UUID> candidates = new ArrayList<>(List.of(candidateTwo(), candidateOne()));
-        OrderIntentBatchRequest request = request(candidates);
-        candidates.clear();
+        ArrayList<OrderIntentRequest> intents =
+                new ArrayList<>(List.of(approved(TWO), approved(ONE)));
+        OrderIntentBatchRequest request = request(intents);
+        intents.clear();
 
         assertAll(
-                () -> assertEquals(List.of(candidateOne(), candidateTwo()), request.candidateIds()),
-                () -> assertThrows(UnsupportedOperationException.class, () -> request.candidateIds().add(candidateThree())));
+                () -> assertEquals(
+                        List.of(ONE, TWO),
+                        request.intents().stream().map(OrderIntentRequest::candidateId).toList()),
+                () -> assertThrows(
+                        UnsupportedOperationException.class,
+                        () -> request.intents().add(approved(THREE))));
     }
 
     @Test
     void batchCopiesAndExposesAnImmutableIntentList() {
-        ArrayList<OrderIntentIdentity> identities = new ArrayList<>(List.of(
-                new OrderIntentIdentity(intentOne(), candidateOne()),
-                new OrderIntentIdentity(intentTwo(), candidateTwo())));
-        OrderIntentBatch batch = new OrderIntentBatch(
-                batchId(), botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(), identities);
-        identities.clear();
+        OrderIntentBatch batch = factory.create(request(List.of(approved(ONE), approved(TWO))));
 
         assertAll(
                 () -> assertEquals(2, batch.intents().size()),
-                () -> assertThrows(UnsupportedOperationException.class,
-                        () -> batch.intents().add(new OrderIntentIdentity(intentOne(), candidateThree()))));
+                () -> assertThrows(
+                        UnsupportedOperationException.class,
+                        () -> batch.intents().add(batch.intents().getFirst())));
     }
 
     @Test
-    void constructorsRejectNullIdsNullElementsAndDuplicates() {
-        OrderIntentIdentity identityOne = new OrderIntentIdentity(intentOne(), candidateOne());
-        OrderIntentIdentity identityTwo = new OrderIntentIdentity(intentTwo(), candidateTwo());
-
+    void requestRejectsMissingScopeNullElementsAndDuplicates() {
         assertAll(
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatchRequest(
-                        null, evaluationId(), sourceCandidateBatchId(), List.of(candidateOne()))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatchRequest(
-                        botId(), null, sourceCandidateBatchId(), List.of(candidateOne()))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatchRequest(
-                        botId(), evaluationId(), null, List.of(candidateOne()))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatchRequest(
-                        botId(), evaluationId(), sourceCandidateBatchId(), Collections.singletonList(null))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatchRequest(
-                        botId(), evaluationId(), sourceCandidateBatchId(), null)),
-                () -> assertThrows(IllegalArgumentException.class, () -> request(List.of(candidateOne(), candidateOne()))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentIdentity(null, candidateOne())),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentIdentity(intentOne(), null)),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatch(
-                        null, botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(), List.of(identityOne))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatch(
-                        UUID.randomUUID(), null, evaluationId(), sourceCandidateBatchId(), fingerprint(), List.of(identityOne))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatch(
-                        UUID.randomUUID(), botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(),
-                        Collections.singletonList(null))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatch(
-                        UUID.randomUUID(), botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(),
-                        List.of(identityTwo, identityOne))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatch(
-                        UUID.randomUUID(), botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(),
-                        List.of(identityOne, new OrderIntentIdentity(intentTwo(), candidateOne())))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatch(
-                        UUID.randomUUID(), botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(),
-                        List.of(identityOne, new OrderIntentIdentity(intentOne(), candidateTwo())))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatch(
-                        UUID.randomUUID(), botId(), evaluationId(), sourceCandidateBatchId(), "not-a-fingerprint", List.of(identityOne))),
+                () -> assertThrows(IllegalArgumentException.class, () -> request(
+                        null, PARTITION, EVENT, EVALUATION, SOURCE, List.of(approved(ONE)))),
+                () -> assertThrows(IllegalArgumentException.class, () -> request(
+                        BOT, null, EVENT, EVALUATION, SOURCE, List.of(approved(ONE)))),
+                () -> assertThrows(IllegalArgumentException.class, () -> request(
+                        BOT, PARTITION, null, EVALUATION, SOURCE, List.of(approved(ONE)))),
+                () -> assertThrows(IllegalArgumentException.class, () -> request(
+                        BOT, PARTITION, EVENT, null, SOURCE, List.of(approved(ONE)))),
+                () -> assertThrows(IllegalArgumentException.class, () -> request(
+                        BOT, PARTITION, EVENT, EVALUATION, null, List.of(approved(ONE)))),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> request(Collections.singletonList(null))),
+                () -> assertThrows(IllegalArgumentException.class, () -> request(null)),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> request(List.of(approved(ONE), approved(ONE)))),
                 () -> assertThrows(IllegalArgumentException.class, () -> factory.create(null)),
-                () -> assertDoesNotThrow(() -> new OrderIntentBatch(
-                        batchId(), botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(),
-                        List.of(identityOne, identityTwo))));
+                () -> assertDoesNotThrow(() -> request(List.of(approved(ONE), approved(TWO)))));
     }
 
     @Test
-    void constructorsRejectIdsThatAreNotRfc4122VersionFive() {
-        OrderIntentIdentity validIdentity = new OrderIntentIdentity(intentOne(), candidateOne());
+    void batchRejectsIdsThatAreNotRfc4122VersionFive() {
+        OrderIntent valid = factory.create(request(List.of(approved(ONE)))).intents().getFirst();
         UUID versionFiveWithNonRfcVariant = UUID.fromString("80000000-0000-5000-0000-000000000000");
 
         assertAll(
                 () -> assertThrows(IllegalArgumentException.class,
-                        () -> new OrderIntentIdentity(UUID.randomUUID(), candidateOne())),
+                        () -> new OrderIntent(UUID.randomUUID(), valid.intentKey(), valid.request())),
+                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntent(
+                        versionFiveWithNonRfcVariant, valid.intentKey(), valid.request())),
+                () -> assertThrows(IllegalArgumentException.class, () -> batchOf(UUID.randomUUID(), valid)),
                 () -> assertThrows(IllegalArgumentException.class,
-                        () -> new OrderIntentIdentity(versionFiveWithNonRfcVariant, candidateOne())),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatch(
-                        UUID.randomUUID(), botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(),
-                        List.of(validIdentity))),
-                () -> assertThrows(IllegalArgumentException.class, () -> new OrderIntentBatch(
-                        versionFiveWithNonRfcVariant, botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(),
-                        List.of(validIdentity))),
-                () -> assertDoesNotThrow(() -> new OrderIntentBatch(
-                        batchId(), botId(), evaluationId(), sourceCandidateBatchId(), fingerprint(), List.of(validIdentity))));
+                        () -> batchOf(versionFiveWithNonRfcVariant, valid)),
+                () -> assertDoesNotThrow(() -> batchOf(BATCH_ID, valid)));
     }
 
-    private static OrderIntentBatchRequest request(List<UUID> candidates) {
-        return request(botId(), evaluationId(), sourceCandidateBatchId(), candidates);
+    @Test
+    void intentKeyMustNameItsSourceCandidate() {
+        OrderIntent valid = factory.create(request(List.of(approved(ONE)))).intents().getFirst();
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new OrderIntent(valid.intentId(), "candidate:" + TWO, valid.request()));
+    }
+
+    private static OrderIntentBatch batchOf(UUID batchId, OrderIntent intent) {
+        return new OrderIntentBatch(
+                batchId, BOT, PARTITION, EVENT, EVALUATION, HASH, HASH, "rules:v1", HASH, AT,
+                List.of(intent));
+    }
+
+    private static OrderIntentRequest approved(UUID candidateId) {
+        return new OrderIntentRequest(
+                candidateId, FLOW, INSTRUMENT, OrderSide.BUY, OrderPositionEffect.INCREASE_LONG,
+                OrderType.MARKET, TimeInForce.DAY, new BigDecimal("2"), null, null, null,
+                IntentDecision.APPROVED, "ELIGIBLE", new BigDecimal("2"));
+    }
+
+    private static OrderIntentRequest rejected(UUID candidateId) {
+        return new OrderIntentRequest(
+                candidateId, FLOW, INSTRUMENT, OrderSide.BUY, OrderPositionEffect.INCREASE_LONG,
+                OrderType.MARKET, TimeInForce.DAY, new BigDecimal("2"), null, null, null,
+                IntentDecision.REJECTED, "RISK_LIMIT_EXCEEDED", null);
+    }
+
+    private static OrderIntentBatchRequest request(List<OrderIntentRequest> intents) {
+        return request(BOT, PARTITION, EVENT, EVALUATION, SOURCE, intents);
     }
 
     private static OrderIntentBatchRequest request(
-            UUID botId, UUID evaluationId, UUID sourceCandidateBatchId, List<UUID> candidates) {
-        return new OrderIntentBatchRequest(botId, evaluationId, sourceCandidateBatchId, candidates);
+            UUID botId, UUID partitionId, UUID sourceEventId, UUID evaluationId, UUID sourceBatchId,
+            List<OrderIntentRequest> intents) {
+        return new OrderIntentBatchRequest(
+                botId, partitionId, sourceEventId, evaluationId, sourceBatchId, AT, intents);
     }
 
     private static UUID intentFor(OrderIntentBatch batch, UUID candidateId) {
@@ -213,43 +247,23 @@ class OrderIntentBatchFactoryTest {
                 .intentId();
     }
 
-    private static UUID botId() {
-        return UUID.fromString("10000000-0000-0000-0000-000000000001");
-    }
-
-    private static UUID evaluationId() {
-        return UUID.fromString("20000000-0000-0000-0000-000000000002");
-    }
-
-    private static UUID sourceCandidateBatchId() {
-        return UUID.fromString("30000000-0000-0000-0000-000000000003");
-    }
-
-    private static UUID candidateOne() {
-        return UUID.fromString("40000000-0000-0000-0000-000000000004");
-    }
-
-    private static UUID candidateTwo() {
-        return UUID.fromString("50000000-0000-0000-0000-000000000005");
-    }
-
-    private static UUID candidateThree() {
-        return UUID.fromString("60000000-0000-0000-0000-000000000006");
-    }
-
-    private static UUID intentOne() {
-        return UUID.fromString("60000000-0000-5000-8000-000000000006");
-    }
-
-    private static UUID intentTwo() {
-        return UUID.fromString("70000000-0000-5000-8000-000000000007");
-    }
-
-    private static UUID batchId() {
-        return UUID.fromString("80000000-0000-5000-8000-000000000008");
-    }
-
-    private static String fingerprint() {
-        return "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    }
+    private static final UUID BOT = UUID.fromString("10000000-0000-0000-0000-000000000001");
+    private static final UUID OTHER_BOT = UUID.fromString("11111111-1111-1111-1111-111111111111");
+    private static final UUID PARTITION = UUID.fromString("1a000000-0000-0000-0000-00000000001a");
+    private static final UUID OTHER_PARTITION = UUID.fromString("1b000000-0000-0000-0000-00000000001b");
+    private static final UUID EVENT = UUID.fromString("1c000000-0000-0000-0000-00000000001c");
+    private static final UUID OTHER_EVENT = UUID.fromString("1d000000-0000-0000-0000-00000000001d");
+    private static final UUID EVALUATION = UUID.fromString("20000000-0000-0000-0000-000000000002");
+    private static final UUID OTHER_EVALUATION = UUID.fromString("22222222-2222-2222-2222-222222222222");
+    private static final UUID SOURCE = UUID.fromString("30000000-0000-0000-0000-000000000003");
+    private static final UUID OTHER_SOURCE = UUID.fromString("33333333-3333-3333-3333-333333333333");
+    private static final UUID ONE = UUID.fromString("40000000-0000-0000-0000-000000000004");
+    private static final UUID TWO = UUID.fromString("50000000-0000-0000-0000-000000000005");
+    private static final UUID THREE = UUID.fromString("60000000-0000-0000-0000-000000000006");
+    private static final UUID FLOW = UUID.fromString("70000000-0000-0000-0000-000000000007");
+    private static final UUID INSTRUMENT = UUID.fromString("80000000-0000-0000-0000-000000000008");
+    private static final UUID BATCH_ID = UUID.fromString("80000000-0000-5000-8000-000000000008");
+    private static final Instant AT = Instant.parse("2026-08-02T09:00:00Z");
+    private static final String HASH =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 }
