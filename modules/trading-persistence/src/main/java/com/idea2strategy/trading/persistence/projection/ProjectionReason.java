@@ -1,6 +1,7 @@
 package com.idea2strategy.trading.persistence.projection;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -18,7 +19,7 @@ public record ProjectionReason(
         Objects.requireNonNull(type, "type");
         code = requiredText(code, "code");
         detail = requiredText(detail, "detail");
-        Objects.requireNonNull(occurredAt, "occurredAt");
+        occurredAt = Objects.requireNonNull(occurredAt, "occurredAt").truncatedTo(ChronoUnit.MICROS);
     }
 
     private static String requiredText(String value, String name) {

@@ -3,8 +3,10 @@ package com.idea2strategy.trading.persistence.projection;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -23,7 +25,8 @@ public class PostgresProjectionAttributionStore {
     public void attributeOrder(UUID orderId, ExecutionScope scope, Instant attributedAt) {
         Objects.requireNonNull(orderId, "orderId");
         Objects.requireNonNull(scope, "scope");
-        Objects.requireNonNull(attributedAt, "attributedAt");
+        attributedAt = databaseInstant(attributedAt, "attributedAt");
+        Instant normalizedAt = attributedAt;
         transaction.executeWithoutResult(status -> {
             jdbc.sql("""
                     insert into trading.execution_order_scope
@@ -35,7 +38,7 @@ public class PostgresProjectionAttributionStore {
                     .param("botId", scope.botId())
                     .param("partitionId", scope.partitionId())
                     .param("flowId", scope.flowId())
-                    .param("attributedAt", offset(attributedAt))
+                    .param("attributedAt", offset(normalizedAt))
                     .update();
             OrderAttribution stored = jdbc.sql("""
                     select bot_id, partition_id, flow_id, attributed_at
@@ -48,7 +51,7 @@ public class PostgresProjectionAttributionStore {
                                     rs.getObject("flow_id", UUID.class)),
                             rs.getObject("attributed_at", OffsetDateTime.class).toInstant()))
                     .optional().orElseThrow(() -> conflict("order scope was not stored"));
-            if (!stored.scope().equals(scope) || !stored.attributedAt().equals(attributedAt)) {
+            if (!stored.scope().equals(scope) || !stored.attributedAt().equals(normalizedAt)) {
                 throw conflict("order already has different scope attribution evidence");
             }
         });
@@ -58,39 +61,45 @@ public class PostgresProjectionAttributionStore {
             UUID transactionId, ExecutionScope scope, UUID orderId, Instant attributedAt) {
         Objects.requireNonNull(transactionId, "transactionId");
         Objects.requireNonNull(scope, "scope");
-        Objects.requireNonNull(attributedAt, "attributedAt");
-        transaction.executeWithoutResult(status -> {
-            jdbc.sql("""
-                    insert into trading.execution_ledger_scope
-                        (transaction_id, bot_id, partition_id, flow_id, order_id, attributed_at)
-                    values (:transactionId, :botId, :partitionId, :flowId, :orderId, :attributedAt)
-                    on conflict do nothing
-                    """)
-                    .param("transactionId", transactionId)
-                    .param("botId", scope.botId())
-                    .param("partitionId", scope.partitionId())
-                    .param("flowId", scope.flowId())
-                    .param("orderId", orderId)
-                    .param("attributedAt", offset(attributedAt))
-                    .update();
-            LedgerAttribution stored = jdbc.sql("""
-                    select bot_id, partition_id, flow_id, order_id, attributed_at
-                    from trading.execution_ledger_scope where transaction_id = :transactionId
-                    """).param("transactionId", transactionId)
-                    .query((rs, row) -> new LedgerAttribution(
-                            new ExecutionScope(
-                                    rs.getObject("bot_id", UUID.class),
-                                    rs.getObject("partition_id", UUID.class),
-                                    rs.getObject("flow_id", UUID.class)),
-                            rs.getObject("order_id", UUID.class),
-                            rs.getObject("attributed_at", OffsetDateTime.class).toInstant()))
-                    .optional().orElseThrow(() -> conflict("ledger scope was not stored"));
-            if (!stored.scope().equals(scope)
-                    || !Objects.equals(stored.orderId(), orderId)
-                    || !stored.attributedAt().equals(attributedAt)) {
-                throw conflict("ledger transaction already has different scope attribution evidence");
-            }
-        });
+        attributedAt = databaseInstant(attributedAt, "attributedAt");
+        Instant normalizedAt = attributedAt;
+        try {
+            transaction.executeWithoutResult(status -> {
+                jdbc.sql("""
+                        insert into trading.execution_ledger_scope
+                            (transaction_id, bot_id, partition_id, flow_id, order_id, attributed_at)
+                        values (:transactionId, :botId, :partitionId, :flowId, :orderId, :attributedAt)
+                        on conflict do nothing
+                        """)
+                        .param("transactionId", transactionId)
+                        .param("botId", scope.botId())
+                        .param("partitionId", scope.partitionId())
+                        .param("flowId", scope.flowId())
+                        .param("orderId", orderId)
+                        .param("attributedAt", offset(normalizedAt))
+                        .update();
+                LedgerAttribution stored = jdbc.sql("""
+                        select bot_id, partition_id, flow_id, order_id, attributed_at
+                        from trading.execution_ledger_scope where transaction_id = :transactionId
+                        """).param("transactionId", transactionId)
+                        .query((rs, row) -> new LedgerAttribution(
+                                new ExecutionScope(
+                                        rs.getObject("bot_id", UUID.class),
+                                        rs.getObject("partition_id", UUID.class),
+                                        rs.getObject("flow_id", UUID.class)),
+                                rs.getObject("order_id", UUID.class),
+                                rs.getObject("attributed_at", OffsetDateTime.class).toInstant()))
+                        .optional().orElseThrow(() -> conflict("ledger scope was not stored"));
+                if (!stored.scope().equals(scope)
+                        || !Objects.equals(stored.orderId(), orderId)
+                        || !stored.attributedAt().equals(normalizedAt)) {
+                    throw conflict("ledger transaction already has different scope attribution evidence");
+                }
+            });
+        } catch (DataIntegrityViolationException exception) {
+            throw new ProjectionAttributionConflictException(
+                    "ledger attribution violates source transaction scope", exception);
+        }
     }
 
     public void appendReason(ProjectionReason reason) {
@@ -139,6 +148,10 @@ public class PostgresProjectionAttributionStore {
 
     private static OffsetDateTime offset(Instant instant) {
         return instant.atOffset(ZoneOffset.UTC);
+    }
+
+    private static Instant databaseInstant(Instant instant, String name) {
+        return Objects.requireNonNull(instant, name).truncatedTo(ChronoUnit.MICROS);
     }
 
     private static ProjectionAttributionConflictException conflict(String message) {

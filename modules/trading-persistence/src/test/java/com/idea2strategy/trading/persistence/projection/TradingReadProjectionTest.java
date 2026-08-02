@@ -106,17 +106,35 @@ class TradingReadProjectionTest {
         ExecutionScope other = siblingScope(requested);
         UUID requestedTransaction = insertLedger("10.25");
         UUID otherTransaction = insertLedger("77");
-        attribution.attributeLedger(requestedTransaction, requested, null, NOW);
-        attribution.attributeLedger(requestedTransaction, requested, null, NOW);
+        Instant subMicrosecond = NOW.plusNanos(789);
+        attribution.attributeLedger(requestedTransaction, requested, null, subMicrosecond);
+        attribution.attributeLedger(requestedTransaction, requested, null, subMicrosecond);
         attribution.attributeLedger(otherTransaction, other, null, NOW);
         org.junit.jupiter.api.Assertions.assertThrows(
                 ProjectionAttributionConflictException.class,
                 () -> attribution.attributeLedger(requestedTransaction, requested, null, NOW.plusSeconds(1)));
+        UUID correction = insertLedgerDerivative(requestedTransaction, "CORRECTION", "10.25");
+        attribution.attributeLedger(correction, requested, null, subMicrosecond);
+        UUID leakingReversal = insertLedgerDerivative(requestedTransaction, "REVERSAL", "10.25");
+        org.junit.jupiter.api.Assertions.assertThrows(
+                ProjectionAttributionConflictException.class,
+                () -> attribution.attributeLedger(leakingReversal, other, null, NOW));
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.dao.DataIntegrityViolationException.class,
+                () -> jdbc.sql("""
+                        insert into trading.execution_ledger_scope (
+                            transaction_id, bot_id, partition_id, flow_id, attributed_at)
+                        values (:transactionId, :botId, :partitionId, :flowId, :attributedAt)
+                        """).param("transactionId", leakingReversal)
+                        .param("botId", other.botId()).param("partitionId", other.partitionId())
+                        .param("flowId", other.flowId())
+                        .param("attributedAt", OffsetDateTime.parse("2026-08-02T14:30:00Z")).update());
 
         var rows = query.ledger(requested);
-        assertEquals(2, rows.size());
+        assertEquals(4, rows.size());
         assertEquals(requestedTransaction, rows.getFirst().transactionId());
         assertEquals(1, rows.getFirst().entrySequence());
+        assertEquals(correction, rows.getLast().transactionId());
         assertEquals(2, rows.getLast().entrySequence());
         assertDecimal("10.25", rows.getFirst().amount());
     }
@@ -125,13 +143,17 @@ class TradingReadProjectionTest {
     void repeatedAttributionAndReasonDeliveryIsIdempotentButConflictingOwnershipFailsClosed() {
         ExecutionScope requested = scope();
         UUID order = insertRejectedOrder("BUDGET_LIMIT");
-        attribution.attributeOrder(order, requested, NOW);
-        attribution.attributeOrder(order, requested, NOW);
+        Instant subMicrosecond = NOW.plusNanos(789);
+        attribution.attributeOrder(order, requested, subMicrosecond);
+        attribution.attributeOrder(order, requested, subMicrosecond);
         var reason = new ProjectionReason(
                 UUID.randomUUID(), requested, order, ProjectionReasonType.SETTLEMENT,
-                "BOT_STOPPED", "positions liquidated", NOW);
+                "BOT_STOPPED", "positions liquidated", subMicrosecond);
+        assertEquals(NOW, reason.occurredAt());
         attribution.appendReason(reason);
-        attribution.appendReason(reason);
+        attribution.appendReason(new ProjectionReason(
+                reason.reasonId(), requested, order, ProjectionReasonType.SETTLEMENT,
+                "BOT_STOPPED", "positions liquidated", subMicrosecond));
 
         org.junit.jupiter.api.Assertions.assertThrows(
                 ProjectionAttributionConflictException.class,
@@ -144,6 +166,17 @@ class TradingReadProjectionTest {
                 () -> attribution.appendReason(new ProjectionReason(
                         reason.reasonId(), requested, order, ProjectionReasonType.SETTLEMENT,
                         "DIFFERENT", "positions liquidated", NOW)));
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.dao.DataIntegrityViolationException.class,
+                () -> jdbc.sql("""
+                        update trading.execution_projection_reason
+                        set detail = 'mutated' where reason_id = :reasonId
+                        """).param("reasonId", reason.reasonId()).update());
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.dao.DataIntegrityViolationException.class,
+                () -> jdbc.sql("""
+                        delete from trading.execution_projection_reason where reason_id = :reasonId
+                        """).param("reasonId", reason.reasonId()).update());
         assertEquals(2, query.reasons(requested).size());
     }
 
@@ -227,6 +260,38 @@ class TradingReadProjectionTest {
                     values (:transactionId, :sourceEventId, :at, 'STANDARD')
                     """).param("transactionId", transactionId).param("sourceEventId", sourceEventId)
                     .param("at", OffsetDateTime.parse("2026-08-02T14:30:00Z")).update();
+            for (int sequence = 1; sequence <= 2; sequence++) {
+                jdbc.sql("""
+                        insert into trading.official_ledger_entry (
+                            entry_id, transaction_id, entry_sequence, account_code, direction,
+                            currency, amount, source_event_id)
+                        values (:entryId, :transactionId, :sequence, :account, :direction,
+                            'USD', :amount, :sourceEventId)
+                        """).param("entryId", UUID.randomUUID()).param("transactionId", transactionId)
+                        .param("sequence", sequence).param("account", sequence == 1 ? "CASH" : "POSITION")
+                        .param("direction", sequence == 1 ? "DEBIT" : "CREDIT")
+                        .param("amount", new BigDecimal(amount)).param("sourceEventId", sourceEventId).update();
+            }
+        });
+        return transactionId;
+    }
+
+    private static UUID insertLedgerDerivative(UUID sourceTransactionId, String kind, String amount) {
+        UUID transactionId = UUID.randomUUID();
+        UUID sourceEventId = UUID.randomUUID();
+        String referenceColumn = switch (kind) {
+            case "REVERSAL" -> "reverses_transaction_id";
+            case "CORRECTION" -> "corrects_transaction_id";
+            default -> throw new IllegalArgumentException("unsupported derivative kind");
+        };
+        transaction.executeWithoutResult(status -> {
+            jdbc.sql("insert into trading.official_ledger_transaction "
+                            + "(transaction_id, source_event_id, posted_at, posting_kind, "
+                            + referenceColumn + ") values "
+                            + "(:transactionId, :sourceEventId, :at, :kind, :sourceTransactionId)")
+                    .param("transactionId", transactionId).param("sourceEventId", sourceEventId)
+                    .param("at", OffsetDateTime.parse("2026-08-02T14:30:01Z"))
+                    .param("kind", kind).param("sourceTransactionId", sourceTransactionId).update();
             for (int sequence = 1; sequence <= 2; sequence++) {
                 jdbc.sql("""
                         insert into trading.official_ledger_entry (

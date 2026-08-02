@@ -4,4 +4,8 @@ public final class ProjectionAttributionConflictException extends RuntimeExcepti
     public ProjectionAttributionConflictException(String message) {
         super(message);
     }
+
+    public ProjectionAttributionConflictException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }
