@@ -4,50 +4,93 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.idea2strategy.trading.application.port.ResourceReservationStore;
+import com.idea2strategy.trading.domain.order.OrderScope;
+import com.idea2strategy.trading.domain.reservation.ReservationComponentLink;
+import com.idea2strategy.trading.domain.reservation.ReservationOpening;
+import com.idea2strategy.trading.domain.reservation.ReservationPolicyPins;
+import com.idea2strategy.trading.domain.reservation.ReservationPricing;
+import com.idea2strategy.trading.domain.reservation.ReservationReleaseCause;
 import com.idea2strategy.trading.domain.reservation.ResourceReservation;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class ResourceReservationServiceTest {
-    private static final Instant T0 = Instant.parse("2026-08-02T00:00:00Z");
 
+    private static final Instant T0 = Instant.parse("2026-08-02T00:00:00Z");
+    private static final UUID INTENT = UUID.fromString("29000000-0000-4000-8000-000000000001");
+    private static final OrderScope SCOPE = new OrderScope(UUID.randomUUID(), UUID.randomUUID());
+
+    /**
+     * The order the calls arrive in is the canonical one: a reservation is created against an
+     * approved intent, attached to the component composed from it, then drawn on by fills.
+     */
     @Test
-    void delegatesCreationConsumptionAndReleaseToTheAtomicStoreBoundary() {
-        ResourceReservation initial = ResourceReservation.cash(UUID.randomUUID(), "USD", new BigDecimal("100"), T0);
-        ResourceReservation consumed = initial.consume(new BigDecimal("30"), T0.plusSeconds(1));
-        ResourceReservation resized = consumed.resize(new BigDecimal("80"), java.util.List.of(), T0.plusSeconds(2));
-        ResourceReservation released = resized.releaseRemaining(T0.plusSeconds(3), "ORDER_CLOSED");
-        StubStore store = new StubStore(initial, consumed, resized, released);
+    void drivesTheCanonicalReservationLifecycleThroughTheAtomicStoreBoundary() {
+        ResourceReservation reserved =
+                ResourceReservation.cash(INTENT, "USD", amount("20.20"), T0);
+        ReservationOpening opening = new ReservationOpening(
+                reserved, SCOPE, UUID.randomUUID(), UUID.randomUUID(),
+                ReservationPolicyPins.buyingPower(
+                        UUID.randomUUID(), UUID.randomUUID(), "precision-rules:v1"),
+                ReservationPricing.buyingPower(
+                        amount("10"), T0, "m".repeat(64), amount("20"), amount("0.01"),
+                        amount("0.04"), amount("0.15")));
+        RecordingStore store = new RecordingStore(reserved);
         ResourceReservationService service = new ResourceReservationService(store);
 
-        assertSame(initial, service.reserve(initial));
-        assertSame(consumed, service.consume(new ConsumeReservationCommand(
-                UUID.randomUUID(), initial.reservationId(), 1, new BigDecimal("30"), T0.plusSeconds(1))));
-        assertSame(resized, service.resize(new ResizeReservationCommand(UUID.randomUUID(), initial.reservationId(),
-                2, new BigDecimal("80"), java.util.List.of(), T0.plusSeconds(2))));
-        assertSame(released, service.release(new ReleaseReservationCommand(
-                UUID.randomUUID(), initial.reservationId(), 3, T0.plusSeconds(3), "ORDER_CLOSED")));
-        assertEquals(4, store.calls);
+        UUID fillId = UUID.randomUUID();
+        assertSame(reserved, service.reserve(opening));
+        assertSame(reserved, service.attachToOrderComponent(
+                new ReservationComponentLink(SCOPE, reserved.reservationId(), UUID.randomUUID())));
+        assertSame(reserved, service.consume(new ConsumeReservationCommand(
+                reserved.reservationId(), 1, UUID.randomUUID(), fillId, amount("10.02"),
+                T0.plusSeconds(1))));
+        assertSame(reserved, service.settle(new SettleReservationCommand(
+                reserved.reservationId(), 2, UUID.randomUUID(), UUID.randomUUID(), amount("10.02"),
+                T0.plusSeconds(2))));
+        assertSame(reserved, service.release(new ReleaseReservationCommand(
+                reserved.reservationId(), 3, UUID.randomUUID(), ReservationReleaseCause.CANCEL,
+                T0.plusSeconds(3))));
+
+        assertEquals(
+                List.of("createOrLoad", "attachToOrderComponent", "ConsumeReservationCommand",
+                        "SettleReservationCommand", "ReleaseReservationCommand"),
+                store.calls);
     }
 
-    private static final class StubStore implements ResourceReservationStore {
-        private final ResourceReservation initial;
-        private final ResourceReservation consumed;
-        private final ResourceReservation resized;
-        private final ResourceReservation released;
-        private int calls;
-        private StubStore(ResourceReservation initial, ResourceReservation consumed,
-                          ResourceReservation resized, ResourceReservation released) {
-            this.initial = initial; this.consumed = consumed; this.resized = resized; this.released = released;
+    private static BigDecimal amount(String value) {
+        return new BigDecimal(value).setScale(8);
+    }
+
+    private static final class RecordingStore implements ResourceReservationStore {
+
+        private final ResourceReservation reservation;
+        private final List<String> calls = new ArrayList<>();
+
+        private RecordingStore(ResourceReservation reservation) {
+            this.reservation = reservation;
         }
-        public ResourceReservation createOrLoad(ResourceReservation desired) { calls++; return initial; }
+
+        @Override
+        public ResourceReservation createOrLoad(ReservationOpening opening) {
+            calls.add("createOrLoad");
+            return reservation;
+        }
+
+        @Override
+        public ResourceReservation attachToOrderComponent(ReservationComponentLink link) {
+            calls.add("attachToOrderComponent");
+            return reservation;
+        }
+
+        @Override
         public ResourceReservation apply(ReservationCommand command) {
-            calls++;
-            if (command instanceof ConsumeReservationCommand) return consumed;
-            if (command instanceof ResizeReservationCommand) return resized;
-            return released;
+            calls.add(command.getClass().getSimpleName());
+            return reservation;
         }
     }
 }
