@@ -37,11 +37,30 @@ public final class CanonicalBaseline {
         return "filesystem:" + directory().toAbsolutePath();
     }
 
+    /** Flyway location string for this repository's canonical migration contributions. */
+    public static String contributionLocation() {
+        return "filesystem:" + repositoryRoot().resolve("db/migration-contributions/migrations")
+                .toAbsolutePath();
+    }
+
     /** Migrates the canonical baseline into an empty database. */
     public static void migrate(DataSource dataSource) {
         Flyway.configure()
                 .dataSource(dataSource)
                 .locations(flywayLocation())
+                .load()
+                .migrate();
+    }
+
+    /**
+     * Migrates the canonical baseline and then this repository's own contributions on top, which is
+     * what the central assembler produces once the contributions are folded into the bundle. This
+     * is the only way a contribution can be proven against the canonical schema before it ships.
+     */
+    public static void migrateWithContributions(DataSource dataSource) {
+        Flyway.configure()
+                .dataSource(dataSource)
+                .locations(flywayLocation(), contributionLocation())
                 .load()
                 .migrate();
     }
