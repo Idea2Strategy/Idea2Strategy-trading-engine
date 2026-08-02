@@ -23,7 +23,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 @Testcontainers(disabledWithoutDocker = true)
-@SpringBootTest(properties = "trading.fake-candidate.enabled=true")
+@SpringBootTest(properties = {
+        "trading.fake-candidate.enabled=true",
+        "spring.flyway.enabled=true"
+})
 class VirtualFillWorkerIntegrationTest {
     @Container
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
