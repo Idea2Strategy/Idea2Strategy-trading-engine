@@ -5,12 +5,14 @@ import java.time.Instant;
 import java.util.UUID;
 
 public record FillOrderCommand(
-        UUID commandId, UUID orderId, long expectedVersion, BigDecimal delta, Instant occurredAt)
+        UUID commandId, UUID orderId, UUID botEventId, long expectedVersion, BigDecimal delta,
+        Instant occurredAt)
         implements OrderLifecycleCommand {
 
     public FillOrderCommand {
         commandId = required(commandId, "commandId");
         orderId = required(orderId, "orderId");
+        botEventId = required(botEventId, "botEventId");
         expectedVersion = positiveVersion(expectedVersion);
         delta = positive(delta, "delta");
         occurredAt = required(occurredAt, "occurredAt");

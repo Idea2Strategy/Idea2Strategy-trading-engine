@@ -4,12 +4,14 @@ import java.time.Instant;
 import java.util.UUID;
 
 public record CancelOrderCommand(
-        UUID commandId, UUID orderId, long expectedVersion, String reason, Instant occurredAt)
+        UUID commandId, UUID orderId, UUID botEventId, long expectedVersion, String reason,
+        Instant occurredAt)
         implements OrderLifecycleCommand {
 
     public CancelOrderCommand {
         commandId = required(commandId, "commandId");
         orderId = required(orderId, "orderId");
+        botEventId = required(botEventId, "botEventId");
         expectedVersion = positiveVersion(expectedVersion);
         reason = nonBlank(reason, "reason");
         occurredAt = required(occurredAt, "occurredAt");
