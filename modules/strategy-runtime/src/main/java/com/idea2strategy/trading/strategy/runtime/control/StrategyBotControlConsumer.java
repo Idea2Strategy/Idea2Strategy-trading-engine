@@ -4,6 +4,7 @@ import com.idea2strategy.trading.strategy.runtime.plan.ExecutionPlanCompatibilit
 import com.idea2strategy.trading.strategy.runtime.plan.ExecutionPlanSourceSnapshot;
 import com.idea2strategy.trading.strategy.runtime.plan.LoadedExecutionPlan;
 import com.idea2strategy.trading.strategy.runtime.plan.LockedExecutionPlanLoader;
+import com.idea2strategy.trading.strategy.runtime.warmup.WarmupRequest;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -13,6 +14,7 @@ public final class StrategyBotControlConsumer implements BotEvaluationGate {
     private final StrategyBotSnapshotSource snapshotSource;
     private final BotControlCheckpointStore checkpointStore;
     private final BotRuntimeLifecycle lifecycle;
+    private final BotStartupGate warmupGate;
     private final ExecutionPlanCompatibility compatibility;
     private final StrategyBotExecutionPlanAdapter planAdapter = new StrategyBotExecutionPlanAdapter();
 
@@ -21,11 +23,13 @@ public final class StrategyBotControlConsumer implements BotEvaluationGate {
             StrategyBotSnapshotSource snapshotSource,
             BotControlCheckpointStore checkpointStore,
             BotRuntimeLifecycle lifecycle,
+            BotStartupGate warmupGate,
             ExecutionPlanCompatibility compatibility) {
         this.codec = Objects.requireNonNull(codec, "codec");
         this.snapshotSource = Objects.requireNonNull(snapshotSource, "snapshotSource");
         this.checkpointStore = Objects.requireNonNull(checkpointStore, "checkpointStore");
         this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
+        this.warmupGate = Objects.requireNonNull(warmupGate, "warmupGate");
         this.compatibility = Objects.requireNonNull(compatibility, "compatibility");
     }
 
@@ -81,7 +85,9 @@ public final class StrategyBotControlConsumer implements BotEvaluationGate {
         ExecutionPlanSourceSnapshot sourceSnapshot = planAdapter.adapt(run.botId(), compiledPlan);
         LoadedExecutionPlan loaded = new LockedExecutionPlanLoader(
                 ignored -> Optional.of(sourceSnapshot), compatibility).load(run.botId());
-        lifecycle.start(loaded, run.executionEligibleFrom());
+        WarmupRequest warmupRequest = new WarmupRequest(
+                run.botId(), loaded.releaseId(), run.executionEligibleFrom(), compiledPlan.warmupRequirements());
+        warmupGate.start(warmupRequest, ignored -> lifecycle.start(loaded, run.executionEligibleFrom()));
         checkpointStore.save(current.transition(
                 BotControlStatus.RUNNING,
                 compiledPlan.snapshotHash(),

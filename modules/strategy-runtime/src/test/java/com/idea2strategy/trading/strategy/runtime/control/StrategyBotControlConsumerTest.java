@@ -7,10 +7,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import com.idea2strategy.trading.strategy.runtime.plan.ExecutionPlanCompatibility;
 import com.idea2strategy.trading.strategy.runtime.plan.LoadedExecutionPlan;
 import com.idea2strategy.trading.strategy.runtime.evaluation.PerBotEvaluationQueue;
+import com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup;
+import com.idea2strategy.trading.strategy.runtime.warmup.WarmupException;
+import com.idea2strategy.trading.strategy.runtime.warmup.WarmupFailure;
+import com.idea2strategy.trading.strategy.runtime.warmup.WarmupRequest;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -28,7 +35,8 @@ class StrategyBotControlConsumerTest {
         MapSnapshotSource snapshots = new MapSnapshotSource(Map.of(BOT_ID, compiledPlan()));
         MapCheckpointStore checkpoints = new MapCheckpointStore();
         RecordingLifecycle firstLifecycle = new RecordingLifecycle();
-        StrategyBotControlConsumer first = consumer(snapshots, checkpoints, firstLifecycle);
+        RecordingWarmupGate firstWarmup = new RecordingWarmupGate(new ArrayList<>());
+        StrategyBotControlConsumer first = consumer(snapshots, checkpoints, firstLifecycle, firstWarmup);
 
         assertEquals(BotControlResult.STARTED, first.consume(runEnvelope(RUN_KEY, "00000000-0000-4000-8000-000000000211")));
         assertEquals(BotControlResult.DUPLICATE_IGNORED,
@@ -37,6 +45,7 @@ class StrategyBotControlConsumerTest {
         assertEquals(BotControlResult.DUPLICATE_IGNORED, first.consume(stopEnvelope(STOP_KEY)));
 
         assertEquals(1, firstLifecycle.starts);
+        assertEquals(1, firstWarmup.calls);
         assertEquals(1, firstLifecycle.stops);
         assertEquals(BOT_ID, firstLifecycle.loadedPlan.botId());
         assertEquals("basic-compiled-plan.v1", firstLifecycle.loadedPlan.planSchemaVersion());
@@ -44,10 +53,12 @@ class StrategyBotControlConsumerTest {
         assertFalse(first.canAcceptEvaluation(BOT_ID));
 
         RecordingLifecycle restartedLifecycle = new RecordingLifecycle();
-        StrategyBotControlConsumer restarted = consumer(snapshots, checkpoints, restartedLifecycle);
+        RecordingWarmupGate restartedWarmup = new RecordingWarmupGate(new ArrayList<>());
+        StrategyBotControlConsumer restarted = consumer(snapshots, checkpoints, restartedLifecycle, restartedWarmup);
         assertEquals(BotControlResult.DUPLICATE_IGNORED,
                 restarted.consume(runEnvelope(RUN_KEY, "00000000-0000-4000-8000-000000000211")));
         assertEquals(0, restartedLifecycle.starts);
+        assertEquals(0, restartedWarmup.calls);
         assertFalse(restarted.canAcceptEvaluation(BOT_ID));
         BotEvaluationBlockedException blocked = assertThrows(
                 BotEvaluationBlockedException.class,
@@ -56,6 +67,51 @@ class StrategyBotControlConsumerTest {
         try (PerBotEvaluationQueue queue = new PerBotEvaluationQueue(Runnable::run, restarted)) {
             assertThrows(BotEvaluationBlockedException.class, () -> queue.submit(BOT_ID, () -> "forbidden"));
         }
+    }
+
+    @Test
+    void runWarmsEveryCompiledRequirementBeforeStartingAndCheckpointing() {
+        MapSnapshotSource snapshots = new MapSnapshotSource(Map.of(BOT_ID, compiledPlan()));
+        List<String> events = new ArrayList<>();
+        RecordingCheckpointStore checkpoints = new RecordingCheckpointStore(events);
+        RecordingLifecycle lifecycle = new RecordingLifecycle(events);
+        RecordingWarmupGate warmup = new RecordingWarmupGate(events);
+        StrategyBotControlConsumer consumer = consumer(snapshots, checkpoints, lifecycle, warmup);
+
+        assertEquals(BotControlResult.STARTED,
+                consumer.consume(runEnvelope(RUN_KEY, "00000000-0000-4000-8000-000000000211")));
+
+        WarmupRequest request = warmup.request;
+        assertEquals(BOT_ID, request.botId());
+        assertEquals(lifecycle.loadedPlan.releaseId(), request.releaseId());
+        assertEquals(Instant.parse("2026-08-03T13:30:00Z"), request.startupTime());
+        assertEquals(1, request.requirements().size());
+        var requirement = request.requirements().iterator().next();
+        assertEquals("rsi-14-pt1m", requirement.requirementId());
+        assertEquals("00000000-0000-4000-8000-000000000401", requirement.featureId());
+        assertEquals("1.0.0", requirement.featureVersion());
+        assertEquals(Set.of("00000000-0000-4000-8000-000000000301"), requirement.instruments());
+        assertEquals("PT1M", requirement.resolution());
+        assertEquals(14, requirement.requiredObservations());
+        assertEquals(List.of("warmup", "start", "checkpoint"), events);
+    }
+
+    @Test
+    void warmupFailureDoesNotStartOrWriteRunningCheckpoint() {
+        MapSnapshotSource snapshots = new MapSnapshotSource(Map.of(BOT_ID, compiledPlan()));
+        MapCheckpointStore checkpoints = new MapCheckpointStore();
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        BotStartupGate unavailable = (request, starter) -> {
+            throw new WarmupException(WarmupFailure.SNAPSHOT_NOT_FOUND, request.botId().toString());
+        };
+        StrategyBotControlConsumer consumer = consumer(snapshots, checkpoints, lifecycle, unavailable);
+
+        WarmupException failure = assertThrows(WarmupException.class,
+                () -> consumer.consume(runEnvelope(RUN_KEY, "00000000-0000-4000-8000-000000000211")));
+
+        assertEquals(WarmupFailure.SNAPSHOT_NOT_FOUND, failure.failure());
+        assertEquals(0, lifecycle.starts);
+        assertEquals(Optional.empty(), checkpoints.find(BOT_ID));
     }
 
     @Test
@@ -145,15 +201,41 @@ class StrategyBotControlConsumerTest {
         assertEquals(BotControlFailure.PLAN_INTEGRITY_MISMATCH, failure.failure());
     }
 
+    @Test
+    void rejectsAmbiguousWarmupRequirementValuesBeforeChecksumVerification() {
+        StrategyBotContractCodec codec = new StrategyBotContractCodec();
+        List<String> invalidPlans = List.of(
+                compiledPlan().replace("\"resolution\": \"PT1M\"", "\"resolution\": \"PT60S\""),
+                compiledPlan().replace(
+                        "\"instruments\": [\"00000000-0000-4000-8000-000000000301\"]",
+                        "\"instruments\": [\"00000000-0000-4000-8000-000000000301\", \"00000000-0000-4000-8000-000000000301\"]"),
+                compiledPlan().replace("\"featureVersion\": \"1.0.0\"", "\"featureVersion\": \"latest\""));
+
+        invalidPlans.forEach(plan -> {
+            StrategyBotControlException failure = assertThrows(
+                    StrategyBotControlException.class, () -> codec.decodeCompiledPlan(plan));
+            assertEquals(BotControlFailure.INVALID_MESSAGE, failure.failure());
+        });
+    }
+
     private static StrategyBotControlConsumer consumer(
             StrategyBotSnapshotSource snapshots,
             BotControlCheckpointStore checkpoints,
             BotRuntimeLifecycle lifecycle) {
+        return consumer(snapshots, checkpoints, lifecycle, new RecordingWarmupGate(new ArrayList<>()));
+    }
+
+    private static StrategyBotControlConsumer consumer(
+            StrategyBotSnapshotSource snapshots,
+            BotControlCheckpointStore checkpoints,
+            BotRuntimeLifecycle lifecycle,
+            BotStartupGate warmupGate) {
         return new StrategyBotControlConsumer(
                 new StrategyBotContractCodec(),
                 snapshots,
                 checkpoints,
                 lifecycle,
+                warmupGate,
                 new ExecutionPlanCompatibility(
                         "basic-compiled-plan.v1",
                         StrategyBotExecutionPlanAdapter.RUNTIME_SCHEMA_VERSION,
@@ -226,6 +308,16 @@ class StrategyBotControlConsumerTest {
                   "instrumentCatalogVersion": "us-supported-universe:2026-07-31",
                   "compilerVersion": "basic-compiler:1.0.0",
                   "requiredFeatureSetHash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+                  "requiredFeatures": [
+                    {
+                      "requirementId": "rsi-14-pt1m",
+                      "featureId": "00000000-0000-4000-8000-000000000401",
+                      "featureVersion": "1.0.0",
+                      "instruments": ["00000000-0000-4000-8000-000000000301"],
+                      "resolution": "PT1M",
+                      "requiredObservations": 14
+                    }
+                  ],
                   "executionSnapshot": {
                     "immutableStrategyVersion": {
                       "snapshotSchemaVersion": "basic-launch-snapshot.v1",
@@ -265,7 +357,7 @@ class StrategyBotControlConsumerTest {
                       "arguments": {"allocation": "EQUAL", "orderType": "MARKET", "side": "BUY"}
                     }
                   ],
-                  "planChecksum": "sha256:0a614ae06037d1db3f87ac499aa5834a0461f54b8b6dde3de000374b14666693"
+                  "planChecksum": "sha256:88d61198d46dce161c2a929702a7fd1cee5c9b044c470d2590b96f3825fcacb3"
                 }
                 """.formatted(SNAPSHOT_HASH);
     }
@@ -291,13 +383,65 @@ class StrategyBotControlConsumerTest {
         }
     }
 
+    private static final class RecordingCheckpointStore implements BotControlCheckpointStore {
+        private final MapCheckpointStore delegate = new MapCheckpointStore();
+        private final List<String> events;
+
+        private RecordingCheckpointStore(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public Optional<BotControlCheckpoint> find(UUID botId) {
+            return delegate.find(botId);
+        }
+
+        @Override
+        public void save(BotControlCheckpoint checkpoint) {
+            events.add("checkpoint");
+            delegate.save(checkpoint);
+        }
+    }
+
+    private static final class RecordingWarmupGate implements BotStartupGate {
+        private final List<String> events;
+        private WarmupRequest request;
+        private int calls;
+
+        private RecordingWarmupGate(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public PreparedWarmup start(WarmupRequest request, java.util.function.Consumer<PreparedWarmup> starter) {
+            this.request = request;
+            calls++;
+            events.add("warmup");
+            PreparedWarmup prepared = new PreparedWarmup(
+                    "manifest-1", "dataset-1", 1,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Map.of());
+            starter.accept(prepared);
+            return prepared;
+        }
+    }
+
     private static final class RecordingLifecycle implements BotRuntimeLifecycle {
         private int starts;
         private int stops;
         private LoadedExecutionPlan loadedPlan;
+        private final List<String> events;
+
+        private RecordingLifecycle() {
+            this(new ArrayList<>());
+        }
+
+        private RecordingLifecycle(List<String> events) {
+            this.events = events;
+        }
 
         @Override
         public void start(LoadedExecutionPlan plan, Instant executionEligibleFrom) {
+            events.add("start");
             starts++;
             loadedPlan = plan;
         }

@@ -1,6 +1,8 @@
 package com.idea2strategy.trading.strategy.runtime.control;
 
+import com.idea2strategy.trading.strategy.runtime.warmup.WarmupRequirement;
 import java.time.Instant;
+import java.util.Set;
 import java.util.UUID;
 
 sealed interface StrategyBotCommand permits StrategyBotRunCommand, StrategyBotStopCommand {
@@ -39,5 +41,6 @@ record StrategyBotCompiledPlan(
         String schemaVersion,
         String snapshotHash,
         String planChecksum,
+        Set<WarmupRequirement> warmupRequirements,
         String payloadDocument) {
 }
