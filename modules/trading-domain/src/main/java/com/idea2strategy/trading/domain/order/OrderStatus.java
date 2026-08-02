@@ -6,5 +6,10 @@ public enum OrderStatus {
     FILLED,
     CANCELLED,
     EXPIRED,
-    REJECTED
+    REJECTED;
+
+    /** True when no further transition is possible and nothing is left outstanding. */
+    public boolean isTerminal() {
+        return this == FILLED || this == CANCELLED || this == EXPIRED || this == REJECTED;
+    }
 }

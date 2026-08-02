@@ -4,12 +4,14 @@ import java.time.Instant;
 import java.util.UUID;
 
 public record ExpireOrderCommand(
-        UUID commandId, UUID orderId, long expectedVersion, Instant occurredAt, Instant daySessionClose)
+        UUID commandId, UUID orderId, UUID botEventId, long expectedVersion, Instant occurredAt,
+        Instant daySessionClose)
         implements OrderLifecycleCommand {
 
     public ExpireOrderCommand {
         commandId = required(commandId, "commandId");
         orderId = required(orderId, "orderId");
+        botEventId = required(botEventId, "botEventId");
         expectedVersion = positiveVersion(expectedVersion);
         occurredAt = required(occurredAt, "occurredAt");
         if (daySessionClose != null && daySessionClose.isAfter(occurredAt)) {
