@@ -3,13 +3,19 @@ package com.idea2strategy.trading.strategy.runtime.control;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.idea2strategy.trading.strategy.runtime.warmup.WarmupRequirement;
 import java.time.DateTimeException;
+import java.time.Duration;
 import java.time.Instant;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -19,6 +25,7 @@ public final class StrategyBotContractCodec {
     private static final String RUN = "BOT_RUN_COMMAND";
     private static final String STOP = "BOT_STOP_COMMAND";
     private static final Pattern SHA256 = Pattern.compile("sha256:[0-9a-f]{64}");
+    private static final Pattern SEMANTIC_VERSION = Pattern.compile("[0-9]+\\.[0-9]+\\.[0-9]+");
 
     private final ObjectMapper objectMapper;
 
@@ -68,11 +75,13 @@ public final class StrategyBotContractCodec {
         String schemaVersion = requiredText(root, "schemaVersion");
         JsonNode executionSnapshot = requiredObject(root, "executionSnapshot");
         JsonNode immutableVersion = requiredObject(executionSnapshot, "immutableStrategyVersion");
+        Set<WarmupRequirement> warmupRequirements = Set.copyOf(requiredWarmupRequirements(root));
         StrategyBotCompiledPlan compiledPlan = new StrategyBotCompiledPlan(
                 contractVersion,
                 schemaVersion,
                 requiredSha256(immutableVersion, "snapshotHash"),
                 requiredSha256(root, "planChecksum"),
+                warmupRequirements,
                 root.toString());
         String calculatedChecksum = planChecksum(root);
         if (!compiledPlan.planChecksum().equals(calculatedChecksum)) {
@@ -166,6 +175,14 @@ public final class StrategyBotContractCodec {
                 .append("mode=").append(requiredText(executionSnapshot, "mode")).append('\n')
                 .append("initialCashAmount=").append(requiredText(executionSnapshot, "initialCashAmount")).append('\n')
                 .append("currency=").append(requiredText(executionSnapshot, "currency"));
+        requiredWarmupRequirements(root).forEach(requirement -> material.append('\n')
+                .append("requiredFeature=")
+                .append("requirementId=").append(requirement.requirementId())
+                .append('|').append("featureId=").append(requirement.featureId())
+                .append('|').append("featureVersion=").append(requirement.featureVersion())
+                .append('|').append("instruments=").append(String.join(",", requirement.instruments().stream().sorted().toList()))
+                .append('|').append("resolution=").append(requirement.resolution())
+                .append('|').append("requiredObservations=").append(requirement.requiredObservations()));
         JsonNode partitions = requiredArray(executionSnapshot, "partitions");
         if (partitions.isEmpty()) {
             throw failure(BotControlFailure.INVALID_MESSAGE, "partitions must not be empty");
@@ -233,6 +250,97 @@ public final class StrategyBotContractCodec {
             throw failure(BotControlFailure.INVALID_MESSAGE, name + " must be a positive integer");
         }
         return value.intValue();
+    }
+
+    private static List<WarmupRequirement> requiredWarmupRequirements(JsonNode root) {
+        JsonNode values = requiredArray(root, "requiredFeatures");
+        if (values.isEmpty()) {
+            throw failure(BotControlFailure.INVALID_MESSAGE, "requiredFeatures must not be empty");
+        }
+        Set<String> requirementIds = new HashSet<>();
+        Set<String> requirementKeys = new HashSet<>();
+        List<WarmupRequirement> requirements = new ArrayList<>();
+        values.forEach(value -> {
+            String requirementId = requiredText(value, "requirementId");
+            if (!requirementIds.add(requirementId)) {
+                throw failure(BotControlFailure.INVALID_MESSAGE, "requirementId must be unique");
+            }
+            String featureId = requiredCanonicalUuidText(value, "featureId");
+            String featureVersion = requiredText(value, "featureVersion");
+            if (!SEMANTIC_VERSION.matcher(featureVersion).matches()) {
+                throw failure(BotControlFailure.INVALID_MESSAGE,
+                        "featureVersion must be an exact major.minor.patch version");
+            }
+            List<String> instruments = requiredCanonicalUuidList(value, "instruments");
+            String resolution = requiredNormalizedDuration(value, "resolution");
+            int requiredObservations = requiredPositiveInt(value, "requiredObservations");
+            String key = String.join("|", featureId, featureVersion, resolution, String.join(",", instruments));
+            if (!requirementKeys.add(key)) {
+                throw failure(BotControlFailure.INVALID_MESSAGE, "duplicate required feature is not allowed");
+            }
+            requirements.add(new WarmupRequirement(
+                    requirementId, featureId, featureVersion, Set.copyOf(instruments),
+                    resolution, requiredObservations));
+        });
+        return List.copyOf(requirements);
+    }
+
+    private static String requiredCanonicalUuidText(JsonNode parent, String name) {
+        String value = requiredText(parent, name);
+        try {
+            UUID parsed = UUID.fromString(value);
+            if (!parsed.toString().equals(value)) {
+                throw failure(BotControlFailure.INVALID_MESSAGE, name + " must use canonical lowercase UUID format");
+            }
+            return value;
+        } catch (IllegalArgumentException exception) {
+            throw failure(BotControlFailure.INVALID_MESSAGE, name + " must use canonical lowercase UUID format");
+        }
+    }
+
+    private static List<String> requiredCanonicalUuidList(JsonNode parent, String name) {
+        JsonNode values = requiredArray(parent, name);
+        if (values.isEmpty()) {
+            throw failure(BotControlFailure.INVALID_MESSAGE, name + " must not be empty");
+        }
+        List<String> result = new ArrayList<>();
+        values.forEach(value -> {
+            if (!value.isTextual()) {
+                throw failure(BotControlFailure.INVALID_MESSAGE, name + " must contain UUID text");
+            }
+            try {
+                String instrument = value.textValue();
+                UUID parsed = UUID.fromString(instrument);
+                if (!parsed.toString().equals(instrument)) {
+                    throw failure(BotControlFailure.INVALID_MESSAGE,
+                            name + " must use canonical lowercase UUID format");
+                }
+                result.add(instrument);
+            } catch (IllegalArgumentException exception) {
+                throw failure(BotControlFailure.INVALID_MESSAGE,
+                        name + " must use canonical lowercase UUID format");
+            }
+        });
+        result.sort(String::compareTo);
+        if (new HashSet<>(result).size() != result.size()) {
+            throw failure(BotControlFailure.INVALID_MESSAGE, name + " must not contain duplicates");
+        }
+        return List.copyOf(result);
+    }
+
+    private static String requiredNormalizedDuration(JsonNode parent, String name) {
+        String value = requiredText(parent, name);
+        try {
+            Duration duration = Duration.parse(value);
+            if (duration.isZero() || duration.isNegative() || !duration.toString().equals(value)) {
+                throw failure(BotControlFailure.INVALID_MESSAGE,
+                        name + " must be a positive normalized ISO-8601 duration");
+            }
+            return value;
+        } catch (DateTimeException exception) {
+            throw failure(BotControlFailure.INVALID_MESSAGE,
+                    name + " must be a positive normalized ISO-8601 duration");
+        }
     }
 
     private static StrategyBotControlException failure(BotControlFailure failure, String detail) {
