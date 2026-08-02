@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import javax.sql.DataSource;
@@ -53,16 +54,63 @@ public final class CanonicalBaseline {
     }
 
     /**
-     * Migrates the canonical baseline and then this repository's own contributions on top, which is
-     * what the central assembler produces once the contributions are folded into the bundle. This
-     * is the only way a contribution can be proven against the canonical schema before it ships.
+     * Migrates the canonical baseline plus any contribution the central assembler has not folded
+     * into it yet, which is the only way a contribution can be proven against the canonical schema
+     * before it ships.
+     *
+     * <p>A contribution that is already in the baseline is skipped rather than applied twice, so
+     * this keeps working across the refresh that folds it in.
      */
     public static void migrateWithContributions(DataSource dataSource) {
-        Flyway.configure()
-                .dataSource(dataSource)
-                .locations(flywayLocation(), contributionLocation())
-                .load()
-                .migrate();
+        Path contributions = repositoryRoot().resolve("db/migration-contributions/migrations");
+        List<Path> pending = pendingContributions(contributions);
+        if (pending.isEmpty()) {
+            migrate(dataSource);
+            return;
+        }
+        try {
+            Path staged = Files.createTempDirectory("canonical-baseline-with-contributions");
+            staged.toFile().deleteOnExit();
+            for (Path migration : presentMigrationPaths()) {
+                copyInto(migration, staged);
+            }
+            for (Path migration : pending) {
+                copyInto(migration, staged);
+            }
+            Flyway.configure()
+                    .dataSource(dataSource)
+                    .locations("filesystem:" + staged.toAbsolutePath())
+                    .load()
+                    .migrate();
+        } catch (IOException failure) {
+            throw new UncheckedIOException("unable to stage canonical contributions", failure);
+        }
+    }
+
+    /** Contribution migrations the assembled baseline does not already carry. */
+    public static List<Path> pendingContributions(Path contributions) {
+        if (!Files.isDirectory(contributions)) {
+            return List.of();
+        }
+        java.util.Set<String> assembled = new java.util.HashSet<>(presentMigrations());
+        try (Stream<Path> files = Files.list(contributions)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".sql"))
+                    .filter(path -> !assembled.contains(path.getFileName().toString()))
+                    .sorted()
+                    .toList();
+        } catch (IOException failure) {
+            throw new UncheckedIOException(failure);
+        }
+    }
+
+    private static List<Path> presentMigrationPaths() {
+        return presentMigrations().stream().map(directory()::resolve).toList();
+    }
+
+    private static void copyInto(Path migration, Path target) throws IOException {
+        Files.copy(migration, target.resolve(migration.getFileName()));
+        target.resolve(migration.getFileName()).toFile().deleteOnExit();
     }
 
     /** Recorded file name to SHA-256 digest, in manifest order. */
@@ -102,7 +150,7 @@ public final class CanonicalBaseline {
     }
 
     /** Every {@code .sql} file actually present in the baseline directory, sorted. */
-    public static java.util.List<String> presentMigrations() {
+    public static List<String> presentMigrations() {
         try (Stream<Path> files = Files.list(directory())) {
             return files.filter(Files::isRegularFile)
                     .map(path -> path.getFileName().toString())
