@@ -15,10 +15,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 /**
  * Wires B's command transport (RT5) when the consumer it feeds is actually present.
  *
- * <p>The poller is gated on {@link StrategyBotControlConsumer} rather than declared unconditionally:
- * the consumer needs a {@code StrategyBotSnapshotSource}, and until the compiled-plan contract has a
- * runtime producer (root #188) no production source exists. A worker without one starts and runs its
- * other duties instead of failing to wire, and the poller appears the moment the source does.
+ * <p>The poller stays gated on {@link StrategyBotControlConsumer} rather than declared
+ * unconditionally, so a worker whose stop settlement ports are absent starts and runs its other
+ * duties instead of polling commands it could not carry out. Since root #190 gave the compiled-plan
+ * contract a producer and B91 wired the consumer, that gate is normally satisfied — a worker that is
+ * not polling is now a signal worth reading, not the expected state.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableScheduling
@@ -29,13 +30,6 @@ public class StrategyBotControlTransportConfiguration {
      * replicas share one receipt per message and neither redelivers what the other completed.
      */
     public static final String HANDLER_ID = "trading-worker.strategy-bot-control";
-
-    @Bean
-    @ConditionalOnBean(StrategyBotControlConsumer.class)
-    @ConditionalOnProperty(name = "trading.bot-control.transport.enabled", matchIfMissing = true)
-    OutboxReceiptBotControlCheckpointStore botControlCheckpointStore(JdbcClient jdbc) {
-        return new OutboxReceiptBotControlCheckpointStore(jdbc, HANDLER_ID);
-    }
 
     @Bean
     @ConditionalOnBean(StrategyBotControlConsumer.class)
