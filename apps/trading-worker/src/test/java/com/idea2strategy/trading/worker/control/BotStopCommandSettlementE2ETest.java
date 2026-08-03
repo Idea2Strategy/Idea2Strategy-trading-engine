@@ -519,7 +519,9 @@ class BotStopCommandSettlementE2ETest {
     private static BotRuntimeLifecycle haltRecorder(List<String> halts) {
         return new BotRuntimeLifecycle() {
             @Override
-            public void start(LoadedExecutionPlan plan, Instant executionEligibleFrom) {
+            public void start(LoadedExecutionPlan plan,
+                com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup warmup,
+                Instant executionEligibleFrom) {
                 throw new UnsupportedOperationException("no run command is delivered here");
             }
 

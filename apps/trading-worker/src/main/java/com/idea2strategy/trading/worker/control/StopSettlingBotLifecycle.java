@@ -5,6 +5,7 @@ import com.idea2strategy.trading.application.stop.RequestBotStopCommand;
 import com.idea2strategy.trading.domain.stop.StopReason;
 import com.idea2strategy.trading.strategy.runtime.control.BotRuntimeLifecycle;
 import com.idea2strategy.trading.strategy.runtime.plan.LoadedExecutionPlan;
+import com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Locale;
@@ -43,8 +44,8 @@ public final class StopSettlingBotLifecycle implements BotRuntimeLifecycle {
     }
 
     @Override
-    public void start(LoadedExecutionPlan plan, Instant executionEligibleFrom) {
-        delegate.start(plan, executionEligibleFrom);
+    public void start(LoadedExecutionPlan plan, PreparedWarmup warmup, Instant executionEligibleFrom) {
+        delegate.start(plan, warmup, executionEligibleFrom);
     }
 
     @Override

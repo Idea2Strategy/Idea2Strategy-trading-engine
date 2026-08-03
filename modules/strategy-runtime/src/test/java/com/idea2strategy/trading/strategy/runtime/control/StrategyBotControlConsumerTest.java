@@ -3,6 +3,7 @@ package com.idea2strategy.trading.strategy.runtime.control;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.idea2strategy.trading.strategy.runtime.plan.ExecutionPlanCompatibility;
 import com.idea2strategy.trading.strategy.runtime.plan.LoadedExecutionPlan;
@@ -94,6 +95,10 @@ class StrategyBotControlConsumerTest {
         assertEquals("PT1M", requirement.resolution());
         assertEquals(14, requirement.requiredObservations());
         assertEquals(List.of("warmup", "start", "checkpoint"), events);
+        // The prepared history reaches the lifecycle rather than being resolved and dropped. It is
+        // the only thing that can seed a bounded-window feature, so a runtime handed nothing would
+        // report warm-up incomplete for its first fifteen bars of live data instead of evaluating.
+        assertSame(warmup.prepared, lifecycle.receivedWarmup);
     }
 
     @Test
@@ -406,6 +411,7 @@ class StrategyBotControlConsumerTest {
     private static final class RecordingWarmupGate implements BotStartupGate {
         private final List<String> events;
         private WarmupRequest request;
+        private PreparedWarmup prepared;
         private int calls;
 
         private RecordingWarmupGate(List<String> events) {
@@ -417,7 +423,7 @@ class StrategyBotControlConsumerTest {
             this.request = request;
             calls++;
             events.add("warmup");
-            PreparedWarmup prepared = new PreparedWarmup(
+            prepared = new PreparedWarmup(
                     "manifest-1", "dataset-1", 1,
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Map.of());
             starter.accept(prepared);
@@ -429,6 +435,7 @@ class StrategyBotControlConsumerTest {
         private int starts;
         private int stops;
         private LoadedExecutionPlan loadedPlan;
+        private PreparedWarmup receivedWarmup;
         private final List<String> events;
 
         private RecordingLifecycle() {
@@ -440,8 +447,11 @@ class StrategyBotControlConsumerTest {
         }
 
         @Override
-        public void start(LoadedExecutionPlan plan, Instant executionEligibleFrom) {
+        public void start(LoadedExecutionPlan plan,
+                com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup warmup,
+                Instant executionEligibleFrom) {
             events.add("start");
+            receivedWarmup = warmup;
             starts++;
             loadedPlan = plan;
         }

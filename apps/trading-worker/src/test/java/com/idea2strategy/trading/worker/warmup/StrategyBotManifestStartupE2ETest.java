@@ -220,7 +220,9 @@ class StrategyBotManifestStartupE2ETest {
         }
 
         @Override
-        public void start(LoadedExecutionPlan plan, Instant executionEligibleFrom) {
+        public void start(LoadedExecutionPlan plan,
+                com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup warmup,
+                Instant executionEligibleFrom) {
             events.add("start");
             starts++;
         }
