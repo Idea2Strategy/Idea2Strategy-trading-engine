@@ -5,3 +5,17 @@ spring:
     web-application-type: none
     banner-mode: "off"
     keep-alive: true
+
+# The Alpaca SIP -> Redis Streams publishing path activates only when
+# market-gateway.redis-uri is set. Credentials come from the environment
+# (ALPACA_API_KEY / ALPACA_API_SECRET); startup fails closed when rights
+# evidence, the instrument mapping, or credentials are missing or expired.
+#
+# market-gateway:
+#   redis-uri: redis://redis:6379
+#   redis-key-prefix: i2s
+#   instrument-mapping-path: /etc/market-gateway/instruments.json
+#   rights-evidence-path: /etc/market-gateway/alpaca-sip-rights.json
+#   alpaca-endpoint: wss://stream.data.alpaca.markets/v2/sip
+#   reconnect-initial-delay: PT1S
+#   reconnect-max-delay: PT1M
