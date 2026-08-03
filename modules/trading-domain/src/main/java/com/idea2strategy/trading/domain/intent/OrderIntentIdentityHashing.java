@@ -33,6 +33,24 @@ final class OrderIntentIdentityHashing {
      * {@code input_state_hash} is what proves a redelivery carried identical inputs, so every decided
      * field takes part; a batch whose decisions differ must not look like a replay.
      */
+    /** The liquidation analogue of {@link #inputStateHash}: what the settlement flattened, and when. */
+    static String stopLiquidationInputHash(
+            java.util.UUID botId,
+            java.util.UUID partitionId,
+            java.util.UUID sourceEventId,
+            java.time.Instant composedAt,
+            java.util.List<OrderIntentRequest> intents) {
+        MessageDigest digest = digest("SHA-256");
+        writeTag(digest, "stop-liquidation-batch-input:v1");
+        writeUuid(digest, botId);
+        writeUuid(digest, partitionId);
+        writeUuid(digest, sourceEventId);
+        writeString(digest, composedAt.toString());
+        writeInt(digest, intents.size());
+        intents.forEach(intent -> writeIntentRequest(digest, intent));
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
     static String inputStateHash(OrderIntentBatchRequest request) {
         MessageDigest digest = digest("SHA-256");
         writeTag(digest, "order-intent-batch-input:v2");

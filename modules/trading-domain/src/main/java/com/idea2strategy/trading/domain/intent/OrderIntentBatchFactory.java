@@ -36,12 +36,59 @@ public final class OrderIntentBatchFactory {
                 request.botId(),
                 request.partitionId(),
                 request.sourceEventId(),
+                OrderIntentOrigin.FLOW_EVALUATION,
                 request.evaluationId(),
                 OrderIntentIdentityHashing.inputStateHash(request),
                 OrderIntentIdentityHashing.conflictPolicyHash(COMPOSITION_RULES_VERSION),
                 COMPOSITION_RULES_VERSION,
                 OrderIntentIdentityHashing.resultHash(intents),
                 request.composedAt(),
+                intents);
+    }
+
+    /**
+     * The intents a bot stop settlement generates to flatten what the bot still holds.
+     *
+     * <p>No evaluation produced these, so identity cannot come from an evaluation id. It comes from
+     * the settlement's own official event instead: the same {@code sourceEventId} — which the
+     * liquidation step derives from its operation — recomposes to the same batch, the same intents
+     * and therefore the same {@code system_close_actions}, which is what makes a settlement resumed
+     * after a crash converge instead of double-selling.
+     */
+    public OrderIntentBatch createStopLiquidation(
+            UUID botId,
+            UUID partitionId,
+            UUID sourceEventId,
+            java.time.Instant composedAt,
+            List<OrderIntentRequest> requests) {
+        OrderIntentIdentityHashing.requireNonNull(sourceEventId, "sourceEventId");
+        UUID batchId = OrderIntentIdentityHashing.version5(
+                OrderIntentIdentityHashing.BATCH_NAMESPACE,
+                "stop-liquidation-batch:v1",
+                sourceEventId);
+        List<OrderIntent> intents = requests.stream()
+                .map(intent -> new OrderIntent(
+                        OrderIntentIdentityHashing.version5(
+                                OrderIntentIdentityHashing.INTENT_NAMESPACE,
+                                "stop-liquidation-intent:v1",
+                                sourceEventId,
+                                intent.candidateId()),
+                        OrderIntent.INTENT_KEY_PREFIX + intent.candidateId(),
+                        intent))
+                .toList();
+        return new OrderIntentBatch(
+                batchId,
+                botId,
+                partitionId,
+                sourceEventId,
+                OrderIntentOrigin.SYSTEM_STOP_LIQUIDATION,
+                null,
+                OrderIntentIdentityHashing.stopLiquidationInputHash(
+                        botId, partitionId, sourceEventId, composedAt, requests),
+                OrderIntentIdentityHashing.conflictPolicyHash(COMPOSITION_RULES_VERSION),
+                COMPOSITION_RULES_VERSION,
+                OrderIntentIdentityHashing.resultHash(intents),
+                composedAt,
                 intents);
     }
 }

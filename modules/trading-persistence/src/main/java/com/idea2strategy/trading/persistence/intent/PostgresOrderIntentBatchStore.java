@@ -123,7 +123,7 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
                 .param("botId", batch.botId())
                 .param("batchId", batch.batchId())
                 .param("sourceEventId", batch.sourceEventId())
-                .param("originType", OrderIntentOrigin.FLOW_EVALUATION.name())
+                .param("originType", batch.origin().name())
                 .param("evaluationRunId", batch.evaluationId())
                 .param("partitionId", batch.partitionId())
                 .param("flowId", request.flowId())
@@ -174,7 +174,7 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
                             resultSet.getString("result_hash"),
                             instant(resultSet.getObject("finalized_at", OffsetDateTime.class))))
                     .optional()
-                    .map(header -> toDomain(header, desired.evaluationId()));
+                    .map(header -> toDomain(header, desired.origin(), desired.evaluationId()));
         } catch (IllegalArgumentException invalidStoredState) {
             throw conflict(invalidStoredState);
         }
@@ -189,7 +189,7 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
      * checks the canonical {@code evaluation_run_id} the intents carry, so a batch whose intents name
      * a different evaluation is a conflict rather than a silent match.
      */
-    private OrderIntentBatch toDomain(StoredHeader header, UUID evaluationId) {
+    private OrderIntentBatch toDomain(StoredHeader header, OrderIntentOrigin origin, UUID evaluationId) {
         if (!CANONICAL_STATUS.equals(header.status())) {
             throw conflict();
         }
@@ -199,6 +199,7 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
                 header.botId(),
                 header.partitionId(),
                 header.sourceEventId(),
+                origin,
                 evaluationId,
                 header.inputStateHash(),
                 header.conflictPolicyHash(),
@@ -221,7 +222,9 @@ public class PostgresOrderIntentBatchStore implements OrderIntentBatchStore {
                 .param("batchId", batchId)
                 .query(UUID.class)
                 .list();
-        if (distinct.size() > 1 || (distinct.size() == 1 && !evaluationId.equals(distinct.getFirst()))) {
+        if (distinct.size() > 1
+                || (distinct.size() == 1
+                        && !java.util.Objects.equals(evaluationId, distinct.getFirst()))) {
             throw conflict();
         }
     }

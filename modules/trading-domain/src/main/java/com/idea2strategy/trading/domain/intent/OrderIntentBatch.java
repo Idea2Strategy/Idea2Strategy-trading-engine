@@ -25,6 +25,7 @@ public record OrderIntentBatch(
         UUID botId,
         UUID partitionId,
         UUID sourceEventId,
+        OrderIntentOrigin origin,
         UUID evaluationId,
         String inputStateHash,
         String conflictPolicyHash,
@@ -41,7 +42,15 @@ public record OrderIntentBatch(
         OrderIntentIdentityHashing.requireNonNull(botId, "botId");
         OrderIntentIdentityHashing.requireNonNull(partitionId, "partitionId");
         OrderIntentIdentityHashing.requireNonNull(sourceEventId, "sourceEventId");
-        OrderIntentIdentityHashing.requireNonNull(evaluationId, "evaluationId");
+        OrderIntentIdentityHashing.requireNonNull(origin, "origin");
+        // Canonical's flow_intent_requires_evaluation, held at the domain boundary: an evaluated
+        // batch names the run that produced it, and a system batch names none rather than a fake.
+        if (origin == OrderIntentOrigin.FLOW_EVALUATION) {
+            OrderIntentIdentityHashing.requireNonNull(evaluationId, "evaluationId");
+        } else if (evaluationId != null) {
+            throw new IllegalArgumentException(
+                    "a " + origin + " batch is not produced by an evaluation run");
+        }
         OrderIntentIdentityHashing.requireNonNull(finalizedAt, "finalizedAt");
         requireSha256Hex(inputStateHash, "inputStateHash");
         requireSha256Hex(conflictPolicyHash, "conflictPolicyHash");
