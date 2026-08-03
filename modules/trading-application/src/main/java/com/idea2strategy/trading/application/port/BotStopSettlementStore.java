@@ -5,6 +5,7 @@ import com.idea2strategy.trading.domain.stop.BotStopSettlement;
 import com.idea2strategy.trading.domain.stop.StopStep;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -29,6 +30,14 @@ public interface BotStopSettlementStore {
     BotStopSettlement createOrLoad(BotStopSettlement desired);
 
     BotStopSettlement load(UUID settlementId);
+
+    /**
+     * The bot's settlement that has not reached a terminal checkpoint, if it has one.
+     *
+     * <p>This is the fact BLOCK_NEW_WORK is enforced against: from the moment a stop is requested
+     * until the settlement ends, new work for the bot is refused at intake rather than raced.
+     */
+    Optional<BotStopSettlement> findActive(UUID botId);
 
     /** Settlements that have not reached a terminal checkpoint, oldest request first. */
     List<BotStopSettlement> loadRecoverable();

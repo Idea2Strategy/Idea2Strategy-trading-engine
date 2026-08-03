@@ -95,6 +95,45 @@ class CandidateBatchProcessorTest {
         assertEquals(1, ports.settlements.stream().map(Settlement::settlementId).distinct().count());
     }
 
+    /**
+     * BLOCK_NEW_WORK, seen from the intake side: a scoped batch for a bot whose stop settlement is
+     * in flight is refused before anything is claimed, so a recovering settlement never races a
+     * fresh claim for the same bot. An unscoped batch names no bot and passes untouched.
+     */
+    @Test
+    void aScopedBatchOfAStoppingBotIsRefusedBeforeTheClaim() {
+        RecordingPorts ports = new RecordingPorts();
+        UUID botId = UUID.fromString("50000000-0000-0000-0000-000000000005");
+        ports.stopSettlementActive(com.idea2strategy.trading.domain.stop.BotStopSettlement.request(
+                botId, com.idea2strategy.trading.domain.stop.StopReason.USER_REQUEST,
+                "owner pressed stop", Instant.parse("2026-08-01T00:00:00Z")));
+        CandidateBatch scoped = new CandidateBatch(
+                UUID.fromString("11000000-0000-0000-0000-000000000001"),
+                UUID.fromString("21000000-0000-0000-0000-000000000002"),
+                botId,
+                UUID.fromString("51000000-0000-0000-0000-000000000006"),
+                UUID.fromString("52000000-0000-0000-0000-000000000007"),
+                Instant.parse("2026-08-01T00:00:00Z"),
+                List.of(new CandidateOrder(
+                        UUID.fromString("31000000-0000-0000-0000-000000000003"),
+                        UUID.fromString("41000000-0000-0000-0000-000000000004"),
+                        UUID.fromString("53000000-0000-0000-0000-000000000008"),
+                        "BUY",
+                        new BigDecimal("2"),
+                        new BigDecimal("150.25"),
+                        List.of("strategy-entry"))));
+
+        CandidateBatchProcessingResult result = ports.processor().process(scoped);
+        CandidateBatchProcessingResult unscoped = ports.processor().process(candidateBatch());
+
+        assertEquals(CandidateBatchProcessingResult.BLOCKED_BY_STOP, result);
+        assertEquals(CandidateBatchProcessingResult.PROCESSED, unscoped);
+        assertEquals(List.of(), ports.orders.stream()
+                .filter(order -> order.candidateId().equals(
+                        UUID.fromString("31000000-0000-0000-0000-000000000003")))
+                .toList());
+    }
+
     private static CandidateBatch candidateBatch() {
         return new CandidateBatch(
                 UUID.fromString("10000000-0000-0000-0000-000000000001"),
@@ -113,7 +152,8 @@ class CandidateBatchProcessorTest {
     }
 
     private static final class RecordingPorts
-            implements CandidateBatchClaimPort, CandidateBatchStatusPort, OrderPort, ExecutionPort, SettlementPort {
+            implements CandidateBatchClaimPort, CandidateBatchStatusPort, OrderPort, ExecutionPort,
+                SettlementPort, com.idea2strategy.trading.application.port.BotStopSettlementStore {
         private final Set<UUID> claimedBatchIds = new HashSet<>();
         private final Set<UUID> failedBatchIds = new HashSet<>();
         private final Map<UUID, CandidateBatchClaim> activeClaims = new HashMap<>();
@@ -126,7 +166,45 @@ class CandidateBatchProcessorTest {
         private RuntimeException failureRecordingFailure;
 
         CandidateBatchProcessor processor() {
-            return new CandidateBatchProcessor(this, this, this, this, this);
+            return new CandidateBatchProcessor(this, this, this, this, this, this);
+        }
+
+        /** A stoppable bot for the intake gate; every test here runs with no settlement active. */
+        private com.idea2strategy.trading.domain.stop.BotStopSettlement activeSettlement;
+
+        void stopSettlementActive(com.idea2strategy.trading.domain.stop.BotStopSettlement settlement) {
+            this.activeSettlement = settlement;
+        }
+
+        @Override
+        public com.idea2strategy.trading.domain.stop.BotStopSettlement createOrLoad(
+                com.idea2strategy.trading.domain.stop.BotStopSettlement desired) {
+            throw new UnsupportedOperationException("not part of candidate processing");
+        }
+
+        @Override
+        public com.idea2strategy.trading.domain.stop.BotStopSettlement load(UUID settlementId) {
+            throw new UnsupportedOperationException("not part of candidate processing");
+        }
+
+        @Override
+        public Optional<com.idea2strategy.trading.domain.stop.BotStopSettlement> findActive(UUID botId) {
+            return Optional.ofNullable(activeSettlement)
+                    .filter(settlement -> settlement.botId().equals(botId));
+        }
+
+        @Override
+        public List<com.idea2strategy.trading.domain.stop.BotStopSettlement> loadRecoverable() {
+            throw new UnsupportedOperationException("not part of candidate processing");
+        }
+
+        @Override
+        public com.idea2strategy.trading.domain.stop.BotStopSettlement recordStep(
+                com.idea2strategy.trading.domain.stop.BotStopSettlement current,
+                com.idea2strategy.trading.domain.stop.StopStep step,
+                com.idea2strategy.trading.application.stop.StopStepResult result,
+                java.time.Instant occurredAt) {
+            throw new UnsupportedOperationException("not part of candidate processing");
         }
 
         @Override

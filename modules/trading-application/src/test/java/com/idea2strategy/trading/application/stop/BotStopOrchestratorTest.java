@@ -99,6 +99,13 @@ class BotStopOrchestratorTest {
         }
 
         @Override
+        public java.util.Optional<BotStopSettlement> findActive(UUID botId) {
+            return values.values().stream()
+                    .filter(value -> value.botId().equals(botId) && !value.terminal())
+                    .findFirst();
+        }
+
+        @Override
         public List<BotStopSettlement> loadRecoverable() {
             return values.values().stream().filter(value -> !value.terminal()).toList();
         }

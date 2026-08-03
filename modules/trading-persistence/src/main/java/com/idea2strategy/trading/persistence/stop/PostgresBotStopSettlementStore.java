@@ -218,6 +218,14 @@ public class PostgresBotStopSettlementStore implements BotStopSettlementStore {
         }
     }
 
+    @Override
+    public Optional<BotStopSettlement> findActive(UUID botId) {
+        Objects.requireNonNull(botId, "botId");
+        return latestByBot(botId)
+                .map(StoredSettlement::settlement)
+                .filter(settlement -> !settlement.terminal());
+    }
+
     private Optional<StoredSettlement> latestByBot(UUID botId) {
         return jdbc.sql(LATEST_BY_BOT).param("bot", botId).query(PostgresBotStopSettlementStore::stored)
                 .optional();

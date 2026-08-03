@@ -1,5 +1,6 @@
 package com.idea2strategy.trading.application.candidate;
 
+import com.idea2strategy.trading.application.port.BotStopSettlementStore;
 import com.idea2strategy.trading.application.port.CandidateBatchClaimPort;
 import com.idea2strategy.trading.application.port.CandidateBatchStatusPort;
 import com.idea2strategy.trading.application.port.ExecutionPort;
@@ -18,22 +19,33 @@ public final class CandidateBatchProcessor {
     private final OrderPort orderPort;
     private final ExecutionPort executionPort;
     private final SettlementPort settlementPort;
+    private final BotStopSettlementStore stopSettlements;
 
     public CandidateBatchProcessor(
             CandidateBatchClaimPort claimPort,
             CandidateBatchStatusPort statusPort,
             OrderPort orderPort,
             ExecutionPort executionPort,
-            SettlementPort settlementPort) {
+            SettlementPort settlementPort,
+            BotStopSettlementStore stopSettlements) {
         this.claimPort = Objects.requireNonNull(claimPort, "claimPort");
         this.statusPort = Objects.requireNonNull(statusPort, "statusPort");
         this.orderPort = Objects.requireNonNull(orderPort, "orderPort");
         this.executionPort = Objects.requireNonNull(executionPort, "executionPort");
         this.settlementPort = Objects.requireNonNull(settlementPort, "settlementPort");
+        this.stopSettlements = Objects.requireNonNull(stopSettlements, "stopSettlements");
     }
 
     public CandidateBatchProcessingResult process(CandidateBatch batch) {
         Objects.requireNonNull(batch, "batch");
+        // BLOCK_NEW_WORK, enforced where new work enters. A bot whose stop settlement is still in
+        // flight takes no new candidates, and refusing before the claim leaves no processing row a
+        // recovering settlement would race against. An unscoped batch names no bot and cannot reach
+        // a canonical order anyway, so only the scoped shape is gated.
+        if (batch.carriesPartitionScope()
+                && stopSettlements.findActive(batch.botId()).isPresent()) {
+            return CandidateBatchProcessingResult.BLOCKED_BY_STOP;
+        }
         CandidateBatchClaim claim = claimPort.claim(batch).orElse(null);
         if (claim == null) {
             return CandidateBatchProcessingResult.DUPLICATE;

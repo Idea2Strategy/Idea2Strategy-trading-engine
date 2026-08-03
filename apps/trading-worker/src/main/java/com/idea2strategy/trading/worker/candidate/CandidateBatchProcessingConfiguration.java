@@ -1,6 +1,7 @@
 package com.idea2strategy.trading.worker.candidate;
 
 import com.idea2strategy.trading.application.candidate.CandidateBatchProcessor;
+import com.idea2strategy.trading.application.port.BotStopSettlementStore;
 import com.idea2strategy.trading.application.port.CandidateBatchClaimPort;
 import com.idea2strategy.trading.application.port.CandidateBatchStatusPort;
 import com.idea2strategy.trading.application.port.ExecutionPort;
@@ -18,7 +19,9 @@ public class CandidateBatchProcessingConfiguration {
             CandidateBatchStatusPort statusPort,
             OrderPort orderPort,
             ExecutionPort executionPort,
-            SettlementPort settlementPort) {
-        return new CandidateBatchProcessor(claimPort, statusPort, orderPort, executionPort, settlementPort);
+            SettlementPort settlementPort,
+            BotStopSettlementStore stopSettlements) {
+        return new CandidateBatchProcessor(
+                claimPort, statusPort, orderPort, executionPort, settlementPort, stopSettlements);
     }
 }
