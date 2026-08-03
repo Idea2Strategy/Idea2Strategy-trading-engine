@@ -29,6 +29,15 @@ public record OrderCandidateBatch(
     /** The first schema version that carries the partition isolation scope. */
     public static final int SCOPED_SCHEMA_VERSION = 2;
 
+    /**
+     * The first schema version whose candidates carry an allocation share instead of a quantity.
+     *
+     * <p>Sizing moved to the consumer because that is the only side that holds the partition's
+     * spendable cash, the reference price, the fee and the buffer (F02). See
+     * {@link OrderCandidate} for why a sell carries no measure at all.
+     */
+    public static final int ALLOCATION_SCHEMA_VERSION = 3;
+
     public OrderCandidateBatch {
         if (schemaVersion < 1) {
             throw new IllegalArgumentException("schemaVersion must be positive");
