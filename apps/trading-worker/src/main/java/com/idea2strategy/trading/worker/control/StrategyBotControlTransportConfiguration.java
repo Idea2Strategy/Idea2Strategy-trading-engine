@@ -1,0 +1,70 @@
+package com.idea2strategy.trading.worker.control;
+
+import com.idea2strategy.trading.strategy.runtime.control.StrategyBotControlConsumer;
+import java.time.Clock;
+import java.time.Duration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
+
+/**
+ * Wires B's command transport (RT5) when the consumer it feeds is actually present.
+ *
+ * <p>The poller is gated on {@link StrategyBotControlConsumer} rather than declared unconditionally:
+ * the consumer needs a {@code StrategyBotSnapshotSource}, and until the compiled-plan contract has a
+ * runtime producer (root #188) no production source exists. A worker without one starts and runs its
+ * other duties instead of failing to wire, and the poller appears the moment the source does.
+ */
+@Configuration(proxyBeanMethods = false)
+@EnableScheduling
+public class StrategyBotControlTransportConfiguration {
+
+    /**
+     * The handler identity the receipts are keyed by. It names the consumer, not the process, so two
+     * replicas share one receipt per message and neither redelivers what the other completed.
+     */
+    public static final String HANDLER_ID = "trading-worker.strategy-bot-control";
+
+    @Bean
+    @ConditionalOnBean(StrategyBotControlConsumer.class)
+    @ConditionalOnProperty(name = "trading.bot-control.transport.enabled", matchIfMissing = true)
+    OutboxReceiptBotControlCheckpointStore botControlCheckpointStore(JdbcClient jdbc) {
+        return new OutboxReceiptBotControlCheckpointStore(jdbc, HANDLER_ID);
+    }
+
+    @Bean
+    @ConditionalOnBean(StrategyBotControlConsumer.class)
+    @ConditionalOnProperty(name = "trading.bot-control.transport.enabled", matchIfMissing = true)
+    StrategyBotOutboxPollingWorker strategyBotOutboxPollingWorker(
+            JdbcClient jdbc, StrategyBotControlConsumer consumer, Environment environment) {
+        return new StrategyBotOutboxPollingWorker(new StrategyBotOutboxPoller(
+                jdbc,
+                consumer,
+                Clock.systemUTC(),
+                HANDLER_ID,
+                environment.getProperty("trading.bot-control.worker-id", "trading-worker"),
+                environment.getProperty("trading.bot-control.batch-size", Integer.class, 32),
+                environment.getProperty("trading.bot-control.lease", Duration.class, Duration.ofSeconds(30)),
+                environment.getProperty("trading.bot-control.retry-backoff", Duration.class, Duration.ofSeconds(30)),
+                environment.getProperty("trading.bot-control.max-attempts", Integer.class, 5)));
+    }
+
+    /** The schedule around one {@link StrategyBotOutboxPoller#pollOnce()} cycle. */
+    public static final class StrategyBotOutboxPollingWorker {
+        private final StrategyBotOutboxPoller poller;
+
+        StrategyBotOutboxPollingWorker(StrategyBotOutboxPoller poller) {
+            this.poller = poller;
+        }
+
+        @Scheduled(fixedDelayString = "${trading.bot-control.poll-delay:PT1S}")
+        public void poll() {
+            poller.pollOnce();
+        }
+    }
+}
