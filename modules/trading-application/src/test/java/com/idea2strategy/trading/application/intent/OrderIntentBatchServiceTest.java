@@ -118,6 +118,7 @@ class OrderIntentBatchServiceTest {
                 batch.botId(),
                 batch.partitionId(),
                 batch.sourceEventId(),
+                batch.origin(),
                 batch.evaluationId(),
                 batch.inputStateHash(),
                 batch.conflictPolicyHash(),

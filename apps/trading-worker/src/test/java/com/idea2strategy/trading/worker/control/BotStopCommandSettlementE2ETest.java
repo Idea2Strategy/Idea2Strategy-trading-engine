@@ -100,6 +100,18 @@ class BotStopCommandSettlementE2ETest {
     private static final UUID ACCEPT_EVENT = UUID.fromString("f9130000-0000-4000-8000-000000000001");
     private static final UUID RESERVE_EVENT = UUID.fromString("f9130000-0000-4000-8000-000000000002");
 
+    /** A third bot that actually holds something, for the liquidation step. */
+    private static final UUID LIQ_BOT = UUID.fromString("f9100000-0000-4000-8000-000000000003");
+    private static final UUID LIQ_PARTITION = UUID.fromString("f9110000-0000-4000-8000-000000000003");
+    private static final UUID LIQ_FLOW = UUID.fromString("f9120000-0000-4000-8000-000000000003");
+    private static final UUID LIQ_EVALUATION = UUID.fromString("f9140000-0000-4000-8000-000000000003");
+    private static final UUID LIQ_INTENT_BATCH = UUID.fromString("f9180000-0000-4000-8000-000000000003");
+    private static final UUID LIQ_INTENT = UUID.fromString("f9190000-0000-4000-8000-000000000003");
+    private static final UUID LIQ_CANDIDATE = UUID.fromString("f91a0000-0000-4000-8000-000000000003");
+    private static final UUID LIQ_ACCEPT_EVENT = UUID.fromString("f9130000-0000-4000-8000-000000000003");
+    private static final UUID LIQ_FILL_EVENT = UUID.fromString("f9130000-0000-4000-8000-000000000004");
+    private static final OrderScope LIQ_SCOPE = new OrderScope(LIQ_BOT, LIQ_PARTITION);
+
     private static final Instant T0 = Instant.parse("2026-08-01T14:30:00Z");
     private static final String PRECISION = "precision-rules:v1";
     private static final OrderScope SCOPE = new OrderScope(BOT, PARTITION);
@@ -131,7 +143,7 @@ class BotStopCommandSettlementE2ETest {
                     values ('f91b0000-0000-4000-8000-000000000001', 'ACTIVE',
                         '2026-07-01T00:00:00+00', '2026-07-01T00:00:00+00')
                     """);
-            for (UUID bot : List.of(BOT, BLOCKED_BOT)) {
+            for (UUID bot : List.of(BOT, BLOCKED_BOT, LIQ_BOT)) {
                 statement.addBatch("""
                         insert into bot.bots (id, owner_account_id, mode, name, lifecycle_status,
                             lifecycle_changed_at, created_at, execution_eligible_from)
@@ -151,13 +163,37 @@ class BotStopCommandSettlementE2ETest {
                     values ('%s', '%s', 'Partition', 10000, 0, 0, '%s')
                     """.formatted(BLOCKED_PARTITION, BLOCKED_BOT, "c".repeat(64)));
             statement.addBatch("""
-                    insert into bot.flows (id, partition_id, name, element_catalog_version_id,
-                        compiled_flow_plan_id, position_x, position_y, semantic_document,
-                        layout_document, layout_schema_version, semantic_hash, layout_hash,
-                        configuration_hash)
-                    values ('%s', '%s', 'Flow', gen_random_uuid(), gen_random_uuid(), 0, 0,
-                        '{}', '{}', 'v1', '%s', '%s', '%s')
-                    """.formatted(FLOW, PARTITION, "a".repeat(64), "b".repeat(64), "c".repeat(64)));
+                    insert into bot.bot_partitions (id, bot_id, name, budget_cap_bps,
+                        position_x, position_y, configuration_hash)
+                    values ('%s', '%s', 'Partition', 10000, 0, 0, '%s')
+                    """.formatted(LIQ_PARTITION, LIQ_BOT, "c".repeat(64)));
+            for (Object[] flow : List.of(
+                    new Object[] {FLOW, PARTITION}, new Object[] {LIQ_FLOW, LIQ_PARTITION})) {
+                statement.addBatch("""
+                        insert into bot.flows (id, partition_id, name, element_catalog_version_id,
+                            compiled_flow_plan_id, position_x, position_y, semantic_document,
+                            layout_document, layout_schema_version, semantic_hash, layout_hash,
+                            configuration_hash)
+                        values ('%s', '%s', 'Flow', gen_random_uuid(), gen_random_uuid(), 0, 0,
+                            '{}', '{}', 'v1', '%s', '%s', '%s')
+                        """.formatted(flow[0], flow[1],
+                                "a".repeat(64), "b".repeat(64), "c".repeat(64)));
+            }
+            for (UUID event : List.of(LIQ_ACCEPT_EVENT, LIQ_FILL_EVENT)) {
+                statement.addBatch("""
+                        insert into bot.bot_events (id, bot_id, event_sequence, event_type,
+                            event_schema_version, correlation_id, idempotency_key, occurred_at,
+                            received_at, summary_document)
+                        values ('%s', '%s', %d, 'ORDER_LIFECYCLE', 'v1', gen_random_uuid(),
+                            'f91-liq-seed-%s', '2026-08-01T00:00:00+00', '2026-08-01T00:00:00+00', '{}')
+                        """.formatted(event, LIQ_BOT, event.equals(LIQ_ACCEPT_EVENT) ? 1 : 2, event));
+            }
+            statement.addBatch("""
+                    insert into bot.evaluation_runs (id, bot_id, partition_id, flow_id,
+                        trigger_event_id, status, queued_at)
+                    values ('%s', '%s', '%s', '%s', '%s', 'RUNNING', '2026-08-01T00:00:00+00')
+                    """.formatted(LIQ_EVALUATION, LIQ_BOT, LIQ_PARTITION, LIQ_FLOW,
+                            LIQ_ACCEPT_EVENT));
             for (UUID event : List.of(ACCEPT_EVENT, RESERVE_EVENT)) {
                 statement.addBatch("""
                         insert into bot.bot_events (id, bot_id, event_sequence, event_type,
@@ -211,6 +247,25 @@ class BotStopCommandSettlementE2ETest {
                         'ELIGIBLE')
                     """.formatted(INTENT, BOT, INTENT_BATCH, ACCEPT_EVENT, EVALUATION, PARTITION,
                             FLOW, INSTRUMENT, CANDIDATE));
+            statement.execute("""
+                    insert into trading.order_intent_batches (id, bot_id, partition_id,
+                        source_event_id, status, conflict_policy_hash, composition_rules_version,
+                        input_state_hash, result_hash, finalized_at)
+                    values ('%s', '%s', '%s', '%s', 'FINALIZED', '%s',
+                        'order-intent-composition:v1', '%s', '%s', '2026-08-01T00:00:00+00')
+                    """.formatted(LIQ_INTENT_BATCH, LIQ_BOT, LIQ_PARTITION, LIQ_ACCEPT_EVENT,
+                            "e".repeat(64), "e".repeat(64), "e".repeat(64)));
+            statement.execute("""
+                    insert into trading.order_intents (id, bot_id, batch_id, source_event_id,
+                        origin_type, evaluation_run_id, partition_id, flow_id, instrument_id,
+                        intent_key, side, position_effect, order_type, time_in_force,
+                        requested_quantity, post_netting_quantity, final_quantity, decision,
+                        decision_reason_code)
+                    values ('%s', '%s', '%s', '%s', 'FLOW_EVALUATION', '%s', '%s', '%s', '%s',
+                        'candidate:%s', 'BUY', 'OPEN_LONG', 'MARKET', 'DAY', 2, 2, 2, 'APPROVED',
+                        'ELIGIBLE')
+                    """.formatted(LIQ_INTENT, LIQ_BOT, LIQ_INTENT_BATCH, LIQ_ACCEPT_EVENT,
+                            LIQ_EVALUATION, LIQ_PARTITION, LIQ_FLOW, INSTRUMENT, LIQ_CANDIDATE));
         } catch (java.sql.SQLException failure) {
             throw new IllegalStateException("unable to seed F91 parents", failure);
         }
@@ -233,6 +288,18 @@ class BotStopCommandSettlementE2ETest {
 
     @Autowired
     private CandidateBatchProcessor candidateProcessor;
+
+    @Autowired
+    private com.idea2strategy.trading.persistence.stop.PostgresPositionLiquidation liquidation;
+
+    @Autowired
+    private com.idea2strategy.trading.persistence.fill.PostgresFillRecordStore fills;
+
+    @Autowired
+    private com.idea2strategy.trading.persistence.position.PostgresPositionLotStore lots;
+
+    @Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     @Autowired
     private JdbcClient jdbc;
@@ -303,6 +370,103 @@ class BotStopCommandSettlementE2ETest {
         // The retryable step is retried to completion, exactly as the recovery worker would.
         orchestrator.resumeRecoverable(T0.plusSeconds(180));
         assertTrue(stopStore.findActive(BLOCKED_BOT).isEmpty());
+    }
+
+    /**
+     * The liquidation step over a bot that actually holds something: the remainder becomes a
+     * canonical system-origin intent, the close action names that intent, and asking for the stop
+     * again converges on the same rows instead of selling twice.
+     */
+    @Test
+    void aStopOfABotHoldingAPositionSubmitsOneLiquidationIntent() {
+        openRealPosition();
+        BotStopOrchestrator orchestrator = new BotStopOrchestrator(
+                stopStore, executionGate, orderCleanup, liquidation);
+        StopSettlingBotLifecycle lifecycle = new StopSettlingBotLifecycle(
+                orchestrator, haltRecorder(new ArrayList<>()),
+                Clock.fixed(T0.plusSeconds(300), java.time.ZoneOffset.UTC));
+
+        lifecycle.stop(LIQ_BOT, "USER_REQUESTED");
+        lifecycle.stop(LIQ_BOT, "USER_REQUESTED");
+
+        var intent = jdbc.sql("""
+                        select id, cast(side as varchar) as side,
+                               cast(origin_type as varchar) as origin_type,
+                               requested_quantity, decision_reason_code, evaluation_run_id
+                        from trading.order_intents
+                        where bot_id = ? and cast(origin_type as varchar) = 'SYSTEM_STOP_LIQUIDATION'
+                        """)
+                .param(LIQ_BOT)
+                .query((rs, row) -> Map.of(
+                        "id", rs.getObject("id", UUID.class).toString(),
+                        "side", rs.getString("side"),
+                        "quantity", rs.getBigDecimal("requested_quantity").stripTrailingZeros()
+                                .toPlainString(),
+                        "reason", rs.getString("decision_reason_code"),
+                        "evaluation", String.valueOf(rs.getObject("evaluation_run_id"))))
+                .list();
+        long closeActions = jdbc.sql(
+                        "select count(*) from trading.system_close_actions where bot_id = ?")
+                .param(LIQ_BOT).query(Long.class).single();
+        String actionIntent = jdbc.sql(
+                        "select generated_intent_id from trading.system_close_actions where bot_id = ?")
+                .param(LIQ_BOT).query((rs, row) -> rs.getObject(1, UUID.class).toString()).single();
+
+        assertAll(
+                () -> assertEquals(1, intent.size(), "one remainder, one liquidation intent"),
+                () -> assertEquals("SELL", intent.getFirst().get("side")),
+                () -> assertEquals("2", intent.getFirst().get("quantity")),
+                () -> assertEquals("BOT_STOP", intent.getFirst().get("reason")),
+                () -> assertEquals("null", intent.getFirst().get("evaluation"),
+                        "no evaluation produced a system liquidation"),
+                () -> assertEquals(1L, closeActions),
+                () -> assertEquals(intent.getFirst().get("id"), actionIntent,
+                        "the close action names the intent it generated"),
+                () -> assertTrue(stopStore.findActive(LIQ_BOT).isEmpty()));
+    }
+
+    /** A real FIFO lot for the liquidation bot: order, whole fill and lot open, canonically. */
+    private void openRealPosition() {
+        OrderLifecycle lifecycle = new OrderLifecycleFactory().accepted(new OrderTerms(
+                LIQ_INTENT, LIQ_CANDIDATE, INSTRUMENT, OrderSide.BUY, new BigDecimal("2"),
+                OrderType.MARKET, TimeInForce.DAY, null, null, null, null), T0);
+        orders.createOrLoad(new OrderPlacement(
+                lifecycle, LIQ_SCOPE,
+                new OrderPolicyPins(FEE_POLICY, "broker-rules:v1", PRECISION,
+                        "order-intent-composition:v1"),
+                LIQ_ACCEPT_EVENT,
+                List.of(new OrderComponent(LIQ_INTENT, new BigDecimal("2"), 1))));
+        UUID componentId = jdbc.sql("select id from trading.order_components where order_id = ?")
+                .param(lifecycle.orderId()).query(UUID.class).single();
+
+        BigDecimal quantity = new BigDecimal("2");
+        BigDecimal price = new BigDecimal("10");
+        BigDecimal gross = quantity.multiply(price).setScale(8);
+        BigDecimal fee = gross.multiply(new BigDecimal("0.002")).setScale(8);
+        BigDecimal cash = gross.add(fee).negate();
+        Instant filledAt = T0.plusSeconds(1);
+        com.idea2strategy.trading.domain.fill.FillRecord record =
+                com.idea2strategy.trading.domain.fill.FillRecord.original(
+                        lifecycle.orderId(), "f91-liq-exec-1", quantity, price, fee,
+                        new BigDecimal("0.01"), filledAt, filledAt);
+        new org.springframework.transaction.support.TransactionTemplate(transactionManager)
+                .executeWithoutResult(status -> {
+                    fills.appendOrLoad(new com.idea2strategy.trading.domain.fill.FillPosting(
+                            record, LIQ_SCOPE, LIQ_FILL_EVENT, FEE_POLICY, 20, PRECISION, price,
+                            filledAt, "m".repeat(64), gross, gross, cash, "fill-allocation:v1",
+                            List.of(new com.idea2strategy.trading.domain.fill.FillAllocation(
+                                    componentId, 1, quantity, gross, fee, cash))));
+                    orders.apply(new com.idea2strategy.trading.application.order.FillOrderCommand(
+                            UUID.randomUUID(), lifecycle.orderId(), LIQ_FILL_EVENT, 1, quantity,
+                            filledAt));
+                });
+        UUID allocationId = jdbc.sql(
+                        "select id from trading.fill_component_allocations where fill_id = ?")
+                .param(record.fillRecordId()).query(UUID.class).single();
+        lots.open(new com.idea2strategy.trading.domain.position.LotOpening(
+                LIQ_SCOPE, LIQ_FLOW, INSTRUMENT, componentId, allocationId, LIQ_FILL_EVENT,
+                com.idea2strategy.trading.domain.position.LotSide.LONG, quantity, gross, fee,
+                filledAt));
     }
 
     // ---------------------------------------------------------------- fixtures

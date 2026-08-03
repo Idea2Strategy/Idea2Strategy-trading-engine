@@ -210,8 +210,8 @@ class OrderIntentBatchFactoryTest {
 
     private static OrderIntentBatch batchOf(UUID batchId, OrderIntent intent) {
         return new OrderIntentBatch(
-                batchId, BOT, PARTITION, EVENT, EVALUATION, HASH, HASH, "rules:v1", HASH, AT,
-                List.of(intent));
+                batchId, BOT, PARTITION, EVENT, OrderIntentOrigin.FLOW_EVALUATION, EVALUATION,
+                HASH, HASH, "rules:v1", HASH, AT, List.of(intent));
     }
 
     private static OrderIntentRequest approved(UUID candidateId) {
