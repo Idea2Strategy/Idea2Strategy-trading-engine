@@ -399,7 +399,7 @@ class ScopedCandidateCompositionE2ETest {
                 officialEventFor(batchId),
                 Instant.parse("2026-07-31T14:30:00Z"),
                 List.of(OrderCandidate.heldSell(
-                        candidateId, FIXTURE_INSTRUMENT, FIXTURE_FLOW, new BigDecimal("200"),
+                        candidateId, FIXTURE_INSTRUMENT, FIXTURE_FLOW, new BigDecimal("200"), null,
                         List.of("EXIT")))));
 
         ScopedCompositionResult result = composer.compose(batch);
@@ -453,9 +453,11 @@ class ScopedCandidateCompositionE2ETest {
                 FIXTURE_PARTITION,
                 officialEventFor(batchId),
                 Instant.parse("2026-07-31T14:30:00Z"),
+                // The price arrives as the reference the evaluation decided on, not as a limit: these
+                // are MARKET orders sized from the mark, which is how the runtime publishes them.
                 List.of(OrderCandidate.allocatedBuy(
                         candidateId, FIXTURE_INSTRUMENT, FIXTURE_FLOW, numerator, denominator,
-                        price, List.of("BASIC_RULE_MATCHED")))));
+                        price, null, List.of("BASIC_RULE_MATCHED")))));
     }
 
     /**

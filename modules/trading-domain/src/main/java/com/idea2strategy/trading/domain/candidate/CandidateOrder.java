@@ -27,6 +27,7 @@ public record CandidateOrder(
         String side,
         BigDecimal quantity,
         CandidateAllocation allocation,
+        BigDecimal referencePrice,
         BigDecimal limitPrice,
         List<String> reasonCodes) {
 
@@ -36,6 +37,9 @@ public record CandidateOrder(
         side = Objects.requireNonNull(side, "side");
         if (quantity != null && quantity.signum() <= 0) {
             throw new IllegalArgumentException("quantity must be positive when present");
+        }
+        if (referencePrice != null && referencePrice.signum() <= 0) {
+            throw new IllegalArgumentException("referencePrice must be positive when present");
         }
         if (allocation != null) {
             if (quantity != null) {
@@ -55,14 +59,14 @@ public record CandidateOrder(
     public CandidateOrder(
             UUID candidateId, UUID instrumentId, String side, BigDecimal quantity,
             BigDecimal limitPrice, List<String> reasonCodes) {
-        this(candidateId, instrumentId, null, side, quantity, null, limitPrice, reasonCodes);
+        this(candidateId, instrumentId, null, side, quantity, null, null, limitPrice, reasonCodes);
     }
 
     /** The version 2 shape: partition-scoped, still carrying its own quantity. */
     public CandidateOrder(
             UUID candidateId, UUID instrumentId, UUID flowId, String side, BigDecimal quantity,
             BigDecimal limitPrice, List<String> reasonCodes) {
-        this(candidateId, instrumentId, flowId, side, quantity, null, limitPrice, reasonCodes);
+        this(candidateId, instrumentId, flowId, side, quantity, null, null, limitPrice, reasonCodes);
     }
 
     public Optional<UUID> flow() {

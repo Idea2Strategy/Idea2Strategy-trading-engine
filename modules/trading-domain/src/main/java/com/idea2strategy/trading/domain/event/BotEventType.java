@@ -61,7 +61,18 @@ public enum BotEventType {
     /** Documented in the canonical note. The official ledger failed its own invariant. */
     LEDGER_INVARIANT_VIOLATED,
     /** Documented in the canonical note. Runtime state was rebuilt after a restart. */
-    STATE_REBUILD_COMPLETED;
+    STATE_REBUILD_COMPLETED,
+    /**
+     * One flow finished evaluating one official trigger, whatever it decided.
+     *
+     * <p>C18's judgment record. It is the event a {@code bot.evaluation_runs} row is triggered by and
+     * the source event a candidate batch is keyed to, so an evaluation that produced candidates is
+     * anchored to the same official event as the intents it became. The column is
+     * {@code varchar(80)}, so this needs no canonical change — but the store reads the column back
+     * through {@code valueOf}, which is why the name has to live here rather than being spelled at a
+     * call site.
+     */
+    EVALUATION_COMPLETED;
 
     /** The value stored in {@code bot.bot_events.event_type}. */
     public String storedValue() {

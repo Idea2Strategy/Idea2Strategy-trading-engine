@@ -572,6 +572,14 @@ public class PostgresScopedCandidateComposition implements ScopedCandidateCompos
     }
 
     private Mark referencePrice(CandidateOrder candidate, Instant composedAt) {
+        if (candidate.referencePrice() != null) {
+            // The price the evaluation actually decided on, which is the only mark that exists for an
+            // instrument no fill has ever touched — a bot's first trade in a name would otherwise be
+            // unsizeable forever, because the fill-derived mark below has nothing to read.
+            return new Mark(
+                    candidate.referencePrice(), composedAt,
+                    "candidate-reference-price:v1:" + candidate.candidateId());
+        }
         if (candidate.limitPrice() != null) {
             // The candidate's own price is the sizing basis; its hash records that derivation.
             return new Mark(

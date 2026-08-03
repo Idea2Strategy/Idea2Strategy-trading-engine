@@ -88,6 +88,7 @@ public final class OrderCandidateBatchAdapter {
                 source.allocation()
                         .map(share -> new CandidateAllocation(share.numerator(), share.denominator()))
                         .orElse(null),
+                source.referencePrice(),
                 source.limitPrice(),
                 source.reasonCodes());
     }

@@ -109,7 +109,7 @@ class OrderCandidateBatchAdapterTest {
     void carriesTheAllocationShareOfASchemaVersionThreeBuy() {
         CandidateBatch translated = new OrderCandidateBatchAdapter().toDomain(allocationBatch(
                 OrderCandidate.allocatedBuy(
-                        CANDIDATE, INSTRUMENT, FLOW, 1, 3, null, List.of("BASIC_RULE_MATCHED"))));
+                        CANDIDATE, INSTRUMENT, FLOW, 1, 3, null, null, List.of("BASIC_RULE_MATCHED"))));
 
         var candidate = translated.candidates().getFirst();
         assertEquals("BUY", candidate.side());
@@ -122,7 +122,7 @@ class OrderCandidateBatchAdapterTest {
     @Test
     void carriesNoMeasureForASchemaVersionThreeSell() {
         CandidateBatch translated = new OrderCandidateBatchAdapter().toDomain(allocationBatch(
-                OrderCandidate.heldSell(CANDIDATE, INSTRUMENT, FLOW, null, List.of("EXIT"))));
+                OrderCandidate.heldSell(CANDIDATE, INSTRUMENT, FLOW, null, null, List.of("EXIT"))));
 
         var candidate = translated.candidates().getFirst();
         assertEquals("SELL", candidate.side());
@@ -141,14 +141,14 @@ class OrderCandidateBatchAdapterTest {
                 CANDIDATE, INSTRUMENT, FLOW, OrderSide.BUY, new BigDecimal("2"), null,
                 List.of("BASIC_RULE_MATCHED")));
         OrderCandidateBatch buyWithoutShareAtVersionThree = allocationBatch(new OrderCandidate(
-                CANDIDATE, INSTRUMENT, FLOW, OrderSide.BUY, null, null, null, null,
+                CANDIDATE, INSTRUMENT, FLOW, OrderSide.BUY, null, null, null, null, null,
                 List.of("BASIC_RULE_MATCHED")));
         OrderCandidateBatch shareAtVersionTwo = new OrderCandidateBatch(
                 OrderCandidateBatch.SCOPED_SCHEMA_VERSION,
                 BATCH, EVALUATION, BOT, PARTITION, SOURCE_EVENT,
                 Instant.parse("2026-08-01T00:00:00Z"),
                 List.of(OrderCandidate.allocatedBuy(
-                        CANDIDATE, INSTRUMENT, FLOW, 1, 2, null, List.of("BASIC_RULE_MATCHED"))));
+                        CANDIDATE, INSTRUMENT, FLOW, 1, 2, null, null, List.of("BASIC_RULE_MATCHED"))));
 
         var adapter = new OrderCandidateBatchAdapter();
         assertThrows(IllegalArgumentException.class, () -> adapter.toDomain(quantityAtVersionThree));
@@ -160,17 +160,17 @@ class OrderCandidateBatchAdapterTest {
     @Test
     void refusesAShareThatIsNotAFractionOfSomethingThisServiceCanSpend() {
         assertThrows(IllegalArgumentException.class, () -> OrderCandidate.allocatedBuy(
-                CANDIDATE, INSTRUMENT, FLOW, 0, 3, null, List.of("X")));
+                        CANDIDATE, INSTRUMENT, FLOW, 0, 3, null, null, List.of("X")));
         assertThrows(IllegalArgumentException.class, () -> OrderCandidate.allocatedBuy(
-                CANDIDATE, INSTRUMENT, FLOW, 4, 3, null, List.of("X")));
+                        CANDIDATE, INSTRUMENT, FLOW, 4, 3, null, null, List.of("X")));
         assertThrows(IllegalArgumentException.class, () -> OrderCandidate.allocatedBuy(
-                CANDIDATE, INSTRUMENT, FLOW, 1, 0, null, List.of("X")));
+                        CANDIDATE, INSTRUMENT, FLOW, 1, 0, null, null, List.of("X")));
         // A sell carrying a buy share would imply a fraction of something the producer cannot see.
         assertThrows(IllegalArgumentException.class, () -> new OrderCandidate(
-                CANDIDATE, INSTRUMENT, FLOW, OrderSide.SELL, null, 1, 2, null, List.of("X")));
+                CANDIDATE, INSTRUMENT, FLOW, OrderSide.SELL, null, 1, 2, null, null, List.of("X")));
         // Two measures for one candidate leave no single answer to "how much".
         assertThrows(IllegalArgumentException.class, () -> new OrderCandidate(
-                CANDIDATE, INSTRUMENT, FLOW, OrderSide.BUY, new BigDecimal("2"), 1, 2, null,
+                CANDIDATE, INSTRUMENT, FLOW, OrderSide.BUY, new BigDecimal("2"), 1, 2, null, null,
                 List.of("X")));
     }
 
