@@ -16,23 +16,31 @@ public final class CandidateBatchProcessor {
 
     private final CandidateBatchClaimPort claimPort;
     private final CandidateBatchStatusPort statusPort;
+    private final ScopedCandidateComposer composer;
     private final OrderPort orderPort;
     private final ExecutionPort executionPort;
     private final SettlementPort settlementPort;
     private final BotStopSettlementStore stopSettlements;
 
+    /**
+     * The fixture pipeline ports may be null in production: a version 1 batch carries no partition
+     * scope, can never become a canonical intent, and only exists where the fake candidate source
+     * is enabled. A scoped batch never touches them — it goes to the composer.
+     */
     public CandidateBatchProcessor(
             CandidateBatchClaimPort claimPort,
             CandidateBatchStatusPort statusPort,
+            ScopedCandidateComposer composer,
             OrderPort orderPort,
             ExecutionPort executionPort,
             SettlementPort settlementPort,
             BotStopSettlementStore stopSettlements) {
         this.claimPort = Objects.requireNonNull(claimPort, "claimPort");
         this.statusPort = Objects.requireNonNull(statusPort, "statusPort");
-        this.orderPort = Objects.requireNonNull(orderPort, "orderPort");
-        this.executionPort = Objects.requireNonNull(executionPort, "executionPort");
-        this.settlementPort = Objects.requireNonNull(settlementPort, "settlementPort");
+        this.composer = Objects.requireNonNull(composer, "composer");
+        this.orderPort = orderPort;
+        this.executionPort = executionPort;
+        this.settlementPort = settlementPort;
         this.stopSettlements = Objects.requireNonNull(stopSettlements, "stopSettlements");
     }
 
@@ -52,12 +60,21 @@ public final class CandidateBatchProcessor {
         }
 
         try {
-            batch.candidates().forEach(candidate -> {
+            if (batch.carriesPartitionScope()) {
                 renewOrThrow(claim);
-                Order order = orderPort.place(candidate);
-                Execution execution = executionPort.execute(order);
-                settlementPort.settle(execution);
-            });
+                composer.compose(batch);
+            } else {
+                if (orderPort == null || executionPort == null || settlementPort == null) {
+                    throw new IllegalStateException(
+                            "an unscoped batch is fixture-only and needs the fake pipeline ports");
+                }
+                batch.candidates().forEach(candidate -> {
+                    renewOrThrow(claim);
+                    Order order = orderPort.place(candidate);
+                    Execution execution = executionPort.execute(order);
+                    settlementPort.settle(execution);
+                });
+            }
             renewOrThrow(claim);
             statusPort.complete(claim);
             return CandidateBatchProcessingResult.PROCESSED;

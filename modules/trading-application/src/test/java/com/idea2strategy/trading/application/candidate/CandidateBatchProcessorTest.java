@@ -166,7 +166,14 @@ class CandidateBatchProcessorTest {
         private RuntimeException failureRecordingFailure;
 
         CandidateBatchProcessor processor() {
-            return new CandidateBatchProcessor(this, this, this, this, this, this);
+            // The counting composer drives the same recorders the port route drives, so a scoped
+            // batch and an unscoped batch leave the same evidence per candidate.
+            ScopedCandidateComposer composer = batch -> {
+                batch.candidates().forEach(candidate -> settle(execute(place(candidate))));
+                return new ScopedCompositionResult(
+                        batch.batchId(), batch.candidates().size(), 0, 0, 0);
+            };
+            return new CandidateBatchProcessor(this, this, composer, this, this, this, this);
         }
 
         /** A stoppable bot for the intake gate; every test here runs with no settlement active. */

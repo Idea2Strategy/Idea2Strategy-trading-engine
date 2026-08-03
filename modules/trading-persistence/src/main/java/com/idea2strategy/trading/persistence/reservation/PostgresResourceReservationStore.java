@@ -362,8 +362,10 @@ public class PostgresResourceReservationStore implements ResourceReservationStor
                 && !reservation.instrumentId().equals(facts.instrumentId())) {
             throw conflict("the reservation names a different instrument than its intent");
         }
-        if (!"APPROVED".equals(facts.decision())) {
-            throw conflict("only an approved intent may reserve a resource");
+        // IntentDecision.executes(): APPROVED and REDUCED both carry a final quantity that becomes
+        // an order, and an order needs its reservation. Only the non-executing three are refused.
+        if (!com.idea2strategy.trading.domain.intent.IntentDecision.valueOf(facts.decision()).executes()) {
+            throw conflict("only an executing intent may reserve a resource");
         }
     }
 

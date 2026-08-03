@@ -393,9 +393,23 @@ class CandidateHandoffExactlyOnceE2ETest {
                 intents);
     }
 
+    /**
+     * The processor under test with the counting ports on both routes. The composer route drives
+     * the same counters candidate by candidate, so every delivery-shape assertion in this class
+     * keeps meaning "each candidate reached the boundary exactly once" whichever route the batch
+     * takes; the production composition has its own proof in
+     * {@code ScopedCandidateCompositionE2ETest}.
+     */
     private CandidateBatchProcessor processor(CountingPorts ports) {
+        com.idea2strategy.trading.application.candidate.ScopedCandidateComposer countingComposer =
+                batch -> {
+                    batch.candidates().forEach(candidate ->
+                            ports.settle(ports.execute(ports.place(candidate))));
+                    return new com.idea2strategy.trading.application.candidate.ScopedCompositionResult(
+                            batch.batchId(), batch.candidates().size(), 0, 0, 0);
+                };
         return new CandidateBatchProcessor(
-                claimAdapter, statusPort, ports, ports, ports, stopSettlements);
+                claimAdapter, statusPort, countingComposer, ports, ports, ports, stopSettlements);
     }
 
     private static CandidateBatchProcessingResult raceProcess(
