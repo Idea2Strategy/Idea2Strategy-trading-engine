@@ -118,6 +118,82 @@ class BasicStrategyExecutorTest {
                 () -> result.decisions().get(0).trace().add(result.decisions().get(0).trace().get(0)));
     }
 
+    @Test
+    void ordersInstrumentsAsUnsigned128BitBigEndianNotAsSignedLongs() {
+        UUID high = UUID.fromString("f0000000-0000-4000-8000-000000000001");
+        UUID low = UUID.fromString("00000000-0000-4000-8000-000000000002");
+        UUID signBoundary = UUID.fromString("80000000-0000-4000-8000-000000000003");
+        UUID belowBoundary = UUID.fromString("7fffffff-ffff-4fff-8fff-000000000004");
+        BasicFlow flow = new BasicFlow(
+                "buy-flow",
+                BasicOrderSide.BUY,
+                List.of(high, low, signBoundary, belowBoundary),
+                List.of(new BasicConditionStep(
+                        "condition", input -> BasicConditionOutcome.passed("CONDITION_MET"))));
+
+        BasicExecutionResult result = new BasicStrategyExecutor().execute(
+                request(flow, high, low, signBoundary, belowBoundary));
+
+        assertEquals(List.of(low, belowBoundary, signBoundary, high), result.decisions().stream()
+                .map(BasicInstrumentDecision::instrumentId)
+                .toList());
+    }
+
+    @Test
+    void classifiesAMidStepMissingInputAsInputMissingWithTheRealFailingStep() {
+        BasicFlow flow = new BasicFlow(
+                "buy-flow",
+                BasicOrderSide.BUY,
+                List.of(FIRST_INSTRUMENT, SECOND_INSTRUMENT),
+                List.of(
+                        new BasicConditionStep(
+                                "step-1:LOAD_FEATURE", input -> {
+                                    if (input.instrumentId().equals(FIRST_INSTRUMENT)) {
+                                        throw new BasicInputMissingException(
+                                                "FEATURE_WARMUP_INCOMPLETE",
+                                                Map.of("requiredBars", "15", "availableBars", "14"));
+                                    }
+                                    return BasicConditionOutcome.passed("FEATURE_LOADED");
+                                }),
+                        new BasicConditionStep(
+                                "step-2:COMPARE", input -> {
+                                    assertFalse(input.instrumentId().equals(FIRST_INSTRUMENT),
+                                            "the step after a missing input must not run");
+                                    return BasicConditionOutcome.passed("COMPARE_TRUE");
+                                })));
+
+        BasicExecutionResult result = new BasicStrategyExecutor().execute(
+                request(flow, FIRST_INSTRUMENT, SECOND_INSTRUMENT));
+
+        BasicInstrumentDecision starved = result.decisions().get(0);
+        assertEquals(BasicDecisionStatus.INPUT_MISSING, starved.status());
+        assertEquals("step-1:LOAD_FEATURE", starved.firstFailureStepId().orElseThrow());
+        assertEquals("INSTRUMENT_INPUT_MISSING", starved.firstFailureReason().orElseThrow());
+        assertEquals(1, starved.trace().size());
+        BasicStepTrace failing = starved.trace().get(0);
+        assertFalse(failing.passed());
+        assertEquals("INSTRUMENT_INPUT_MISSING", failing.reasonCode());
+        assertEquals("FEATURE_WARMUP_INCOMPLETE", failing.evidence().get("inputReason"));
+        assertEquals("15", failing.evidence().get("requiredBars"));
+        assertEquals("14", failing.evidence().get("availableBars"));
+        assertEquals(BasicDecisionStatus.CANDIDATE, result.decisions().get(1).status());
+        assertEquals(new EqualAllocationShare(1, 1), result.decisions().get(1).buyAllocation().orElseThrow());
+    }
+
+    @Test
+    void failsClosedOnAMisKeyedInstrumentInputInsteadOfDecidingForAnotherInstrument() {
+        assertThrows(IllegalArgumentException.class, () -> new BasicExecutionRequest(
+                EVALUATION_ID,
+                List.of(new BasicFlow(
+                        "buy-flow",
+                        BasicOrderSide.BUY,
+                        List.of(FIRST_INSTRUMENT),
+                        List.of(new BasicConditionStep(
+                                "condition", input -> BasicConditionOutcome.passed("CONDITION_MET"))))),
+                Map.of(FIRST_INSTRUMENT,
+                        new BasicInstrumentInput(SECOND_INSTRUMENT, Map.of("price", "100.00")))));
+    }
+
     private static BasicConditionStep step(
             String stepId,
             List<String> calls,
