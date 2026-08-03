@@ -177,6 +177,9 @@ class CandidateHandoffExactlyOnceE2ETest {
     private PostgresOrderIntentBatchStore intentStore;
 
     @Autowired
+    private com.idea2strategy.trading.application.port.BotStopSettlementStore stopSettlements;
+
+    @Autowired
     private JdbcClient jdbcClient;
 
     private final OrderCandidateBatchAdapter adapter = new OrderCandidateBatchAdapter();
@@ -391,7 +394,8 @@ class CandidateHandoffExactlyOnceE2ETest {
     }
 
     private CandidateBatchProcessor processor(CountingPorts ports) {
-        return new CandidateBatchProcessor(claimAdapter, statusPort, ports, ports, ports);
+        return new CandidateBatchProcessor(
+                claimAdapter, statusPort, ports, ports, ports, stopSettlements);
     }
 
     private static CandidateBatchProcessingResult raceProcess(
