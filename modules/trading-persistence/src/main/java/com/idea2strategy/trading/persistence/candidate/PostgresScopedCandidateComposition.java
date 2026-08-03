@@ -8,6 +8,7 @@ import com.idea2strategy.trading.application.port.OrderLifecycleStore;
 import com.idea2strategy.trading.application.port.ResourceReservationStore;
 import com.idea2strategy.trading.application.port.TradingPolicyRegistry;
 import com.idea2strategy.trading.domain.budget.BudgetReasonCode;
+import com.idea2strategy.trading.domain.candidate.CandidateAllocation;
 import com.idea2strategy.trading.domain.candidate.CandidateBatch;
 import com.idea2strategy.trading.domain.candidate.CandidateOrder;
 import com.idea2strategy.trading.domain.eligibility.InstrumentFractionalPolicy;
@@ -76,18 +77,28 @@ import org.springframework.transaction.annotation.Transactional;
  *       created — the same engine-wide mark rule the position valuation and the virtual liquidation
  *       quote already share. An instrument no fill has ever touched and no limit price names is
  *       {@code REJECTED NO_REFERENCE_PRICE}: fail closed, no invented number.
+ *   <li><strong>Sizing (buys).</strong> From schema version 3 a candidate carries an allocation
+ *       share, not a quantity, and turning one into the other is this class's work — it is the only
+ *       place that holds all four inputs. The share is applied to spendable cash exactly, then
+ *       divided by what one share truly costs: price plus fixed slippage, fee and buying power
+ *       buffer, which is what the reservation will hold. Sizing on the bare price would approve an
+ *       order the reservation could not cover. Rounded down to whole shares, since no instrument is
+ *       fractional-enabled and rounding up would spend money the share was not given. A version 1 or
+ *       2 candidate keeps using the quantity its producer decided.
  *   <li>Affordability (buys): spendable cash is the bot budget projection's available cash net of
  *       active reservations, capped by the partition's remaining budget. A missing or unvalued
  *       projection rejects every buy with {@code POSITION_VALUATION_UNAVAILABLE}, F02's own
- *       fail-closed rule. When the batch's total estimated cost (notional + fixed 5 bps slippage +
- *       fee + buying power buffer) exceeds spendable cash, every buy is reduced proportionally —
- *       {@code COMMON_FUNDS_PROPORTIONAL_REDUCTION} — and a buy reduced to nothing is rejected with
- *       {@code NO_AVAILABLE_SHARED_FUNDS}.
- *   <li>Sells reduce long exposure only. Basic candidates never open shorts, so a sell beyond the
- *       flow's open FIFO remainder is reduced to what is actually held, and a sell against nothing
- *       is {@code REJECTED NO_OPEN_POSITION} — never an implicit short.
+ *       fail-closed rule — and a share has nothing to be a share of. A share that affords no whole
+ *       share at all is {@code NO_AVAILABLE_SHARED_FUNDS}. When the batch's total estimated cost
+ *       still exceeds spendable cash, every buy is reduced proportionally —
+ *       {@code COMMON_FUNDS_PROPORTIONAL_REDUCTION} — which a share-sized batch reaches only when
+ *       several flows' shares sum past one.
+ *   <li>Sells reduce long exposure only. Basic candidates never open shorts. A version 3 sell states
+ *       no size and takes the flow's whole open FIFO remainder; a legacy one is capped by that
+ *       remainder. A sell against nothing is {@code REJECTED NO_OPEN_POSITION} — never an implicit
+ *       short.
  *   <li>Order contract: a candidate naming a limit price asks for a LIMIT, otherwise MARKET; both
- *       DAY, the only time in force the version 2 candidate contract can express.
+ *       DAY, the only time in force the candidate contract can express.
  * </ul>
  */
 @Component
@@ -99,6 +110,26 @@ public class PostgresScopedCandidateComposition implements ScopedCandidateCompos
     private static final BigDecimal BPS = new BigDecimal("10000");
     private static final int AMOUNT_SCALE = 8;
     private static final int FACTOR_SCALE = 18;
+
+    /**
+     * IEEE 754 decimal128, the same working precision the official feature catalog uses. A share
+     * applied to a budget is intermediate arithmetic, so it is carried wide and only the final share
+     * count is rounded.
+     */
+    private static final java.math.MathContext SHARE_PRECISION =
+            new java.math.MathContext(34, RoundingMode.HALF_EVEN);
+
+    /**
+     * What a rejected share records as its requested quantity.
+     *
+     * <p>Canonical `order_intents.requested_quantity` is NOT NULL and positive: every intent has to
+     * say what was asked for, including a refused one. A version 3 candidate asked for a share, not a
+     * quantity, so when it is rejected before a quantity could be established there is no producer
+     * figure to record. One share is the minimum expression of the decision and it is not a false
+     * statement — for the affordability rejection it is literally true, since the share could not
+     * afford even one. `final_quantity` stays null and the reason code carries why nothing executes.
+     */
+    private static final BigDecimal MINIMUM_REQUESTED_QUANTITY = BigDecimal.ONE;
 
     private static final String LATEST_MARK = """
             select f.reference_price, f.reference_observed_at, f.reference_market_hash
@@ -178,25 +209,27 @@ public class PostgresScopedCandidateComposition implements ScopedCandidateCompos
         EffectiveTradingPolicy.Fee fee = policies.feePolicyAt(composedAt);
         EffectiveTradingPolicy.BuyingPowerBuffer buffer = policies.buyingPowerBufferPolicyAt(composedAt);
 
+        // Spendable cash is resolved before sizing, not after: a version 3 buy carries only a share
+        // of it, so without the budget there is nothing to size against at all.
+        BigDecimal spendable = spendableCash(batch.botId(), batch.partitionId());
+
         Map<UUID, Sizing> sizings = new LinkedHashMap<>();
         List<OrderIntentRequest> requests = new ArrayList<>();
         BigDecimal totalBuyCost = BigDecimal.ZERO;
         for (CandidateOrder candidate : batch.candidates()) {
-            Sizing sizing = size(batch, candidate, composedAt, fee, buffer);
+            Sizing sizing = size(batch, candidate, composedAt, fee, buffer, spendable);
             sizings.put(candidate.candidateId(), sizing);
             if (sizing.rejectionReason() == null && sizing.side() == OrderSide.BUY) {
                 totalBuyCost = totalBuyCost.add(sizing.estimatedCost());
             }
         }
 
-        BigDecimal spendable = spendableCash(batch.botId(), batch.partitionId());
         BigDecimal reductionFactor = null;
-        if (spendable == null) {
-            // F02: without a complete valuation there is no budget to allocate from.
-            sizings.values().stream()
-                    .filter(sizing -> sizing.rejectionReason() == null && sizing.side() == OrderSide.BUY)
-                    .forEach(sizing -> sizing.reject(BudgetReasonCode.POSITION_VALUATION_UNAVAILABLE.name()));
-        } else if (totalBuyCost.compareTo(spendable) > 0) {
+        if (spendable != null && totalBuyCost.compareTo(spendable) > 0) {
+            // A share-sized batch cannot normally overrun its own budget, because each buy took a
+            // fraction of the same spendable figure. This stays as the safety net for the shares of
+            // several flows summing past one, and for a legacy batch whose quantities were the
+            // producer's own.
             reductionFactor = spendable.divide(totalBuyCost, FACTOR_SCALE, RoundingMode.DOWN);
         }
 
@@ -243,11 +276,65 @@ public class PostgresScopedCandidateComposition implements ScopedCandidateCompos
             CandidateOrder candidate,
             Instant composedAt,
             EffectiveTradingPolicy.Fee fee,
-            EffectiveTradingPolicy.BuyingPowerBuffer buffer) {
+            EffectiveTradingPolicy.BuyingPowerBuffer buffer,
+            BigDecimal spendable) {
         OrderSide side = OrderSide.valueOf(candidate.side());
-        Sizing sizing = new Sizing(side, candidate.quantity());
 
-        QuantityMode mode = candidate.quantity().stripTrailingZeros().scale() > 0
+        // The reference price comes first now, because a share cannot be turned into shares without
+        // it, and the eligibility check cannot run before there is a quantity to check.
+        Mark mark = referencePrice(candidate, composedAt);
+        if (mark == null) {
+            Sizing rejected = new Sizing(side, MINIMUM_REQUESTED_QUANTITY);
+            rejected.reject("NO_REFERENCE_PRICE");
+            return rejected;
+        }
+
+        BigDecimal requested;
+        List<LotReservationAllocation> lots = List.of();
+        if (side == OrderSide.BUY) {
+            if (candidate.allocationShare().isPresent()) {
+                if (spendable == null) {
+                    // F02: with no complete valuation there is no budget for a share to be a share of.
+                    Sizing rejected = new Sizing(side, MINIMUM_REQUESTED_QUANTITY);
+                    rejected.price(mark);
+                    rejected.reject(BudgetReasonCode.POSITION_VALUATION_UNAVAILABLE.name());
+                    return rejected;
+                }
+                requested = shareQuantity(
+                        candidate.allocationShare().orElseThrow(), spendable, mark, fee, buffer);
+                if (requested.signum() == 0) {
+                    Sizing rejected = new Sizing(side, MINIMUM_REQUESTED_QUANTITY);
+                    rejected.price(mark);
+                    rejected.reject(BudgetReasonCode.NO_AVAILABLE_SHARED_FUNDS.name());
+                    return rejected;
+                }
+            } else {
+                requested = candidate.requestedQuantity().orElseThrow(
+                        () -> new IllegalStateException(
+                                "a buy candidate carries either a quantity or an allocation share"));
+            }
+        } else {
+            // A sell is the position held. A version 3 sell says nothing about size, and a legacy one
+            // is still capped by what the lots actually hold, so both resolve the same way.
+            lots = openLots(batch, candidate);
+            BigDecimal available = lots.stream()
+                    .map(LotReservationAllocation::reservedQuantity)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal wanted = candidate.requestedQuantity().orElse(available);
+            if (available.signum() == 0 || wanted.signum() == 0) {
+                Sizing rejected = new Sizing(
+                        side, candidate.requestedQuantity().orElse(MINIMUM_REQUESTED_QUANTITY));
+                rejected.price(mark);
+                rejected.reject("NO_OPEN_POSITION");
+                return rejected;
+            }
+            requested = wanted;
+        }
+
+        Sizing sizing = new Sizing(side, requested);
+        sizing.price(mark);
+
+        QuantityMode mode = requested.stripTrailingZeros().scale() > 0
                 ? QuantityMode.FRACTIONAL_SHARES
                 : QuantityMode.WHOLE_SHARES;
         OrderEligibilityDecision decision = eligibility.evaluate(new OrderEligibilityRequest(
@@ -258,38 +345,56 @@ public class PostgresScopedCandidateComposition implements ScopedCandidateCompos
                 candidate.limitPrice() == null ? OrderType.MARKET : OrderType.LIMIT,
                 TimeInForce.DAY,
                 mode,
-                candidate.quantity()));
+                requested));
         if (!decision.reasons().isEmpty()) {
             sizing.reject(decision.reasons().getFirst().name());
             return sizing;
         }
 
-        Mark mark = referencePrice(candidate, composedAt);
-        if (mark == null) {
-            sizing.reject("NO_REFERENCE_PRICE");
-            return sizing;
-        }
-        sizing.price(mark);
-
         if (side == OrderSide.BUY) {
-            BigDecimal notional = amount(candidate.quantity().multiply(mark.price()));
+            BigDecimal notional = amount(requested.multiply(mark.price()));
             sizing.costs(
                     notional,
                     amount(notional.multiply(FIXED_SLIPPAGE_RATE)),
                     amount(notional.multiply(rate(fee.feeRateBps()))),
                     amount(notional.multiply(rate(buffer.bufferBps()))));
         } else {
-            List<LotReservationAllocation> lots = openLots(batch, candidate, sizing.requestedQuantity());
             BigDecimal available = lots.stream()
                     .map(LotReservationAllocation::reservedQuantity)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            if (available.signum() == 0) {
-                sizing.reject("NO_OPEN_POSITION");
-            } else {
-                sizing.lots(lots, available.min(sizing.requestedQuantity()));
-            }
+            sizing.lots(lots, available.min(requested));
         }
         return sizing;
+    }
+
+    /**
+     * How many whole shares a buy's allocation share can afford.
+     *
+     * <p>The share is applied to spendable cash first, exactly — {@code budget × n ÷ d} at working
+     * precision, never a pre-divided decimal — and then divided by what one share truly costs:
+     * the price plus the fixed slippage, the fee and the buying power buffer that the reservation
+     * will hold. Sizing on the bare price would approve an order the reservation could not then
+     * cover, which is the failure this arithmetic exists to prevent.
+     *
+     * <p>Rounded <strong>down</strong> to whole shares. No instrument is fractional-enabled yet, and
+     * rounding up would spend money the share was not given.
+     */
+    private static BigDecimal shareQuantity(
+            CandidateAllocation allocation,
+            BigDecimal spendable,
+            Mark mark,
+            EffectiveTradingPolicy.Fee fee,
+            EffectiveTradingPolicy.BuyingPowerBuffer buffer) {
+        BigDecimal budget = allocation.of(spendable, SHARE_PRECISION);
+        BigDecimal perShareCost = mark.price()
+                .multiply(BigDecimal.ONE
+                        .add(FIXED_SLIPPAGE_RATE)
+                        .add(rate(fee.feeRateBps()))
+                        .add(rate(buffer.bufferBps())), SHARE_PRECISION);
+        if (perShareCost.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        return budget.divide(perShareCost, 0, RoundingMode.DOWN);
     }
 
     private OrderIntentRequest intentRequest(
@@ -484,8 +589,7 @@ public class PostgresScopedCandidateComposition implements ScopedCandidateCompos
                 .orElse(null);
     }
 
-    private List<LotReservationAllocation> openLots(
-            CandidateBatch batch, CandidateOrder candidate, BigDecimal wanted) {
+    private List<LotReservationAllocation> openLots(CandidateBatch batch, CandidateOrder candidate) {
         return jdbc.sql(OPEN_FIFO_LOTS)
                 .param("botId", batch.botId())
                 .param("flowId", candidate.flowId())

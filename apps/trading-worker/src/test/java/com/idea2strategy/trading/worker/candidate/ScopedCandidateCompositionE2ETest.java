@@ -284,6 +284,251 @@ class ScopedCandidateCompositionE2ETest {
                                 + "where intent_key = ?)", "candidate:" + candidateId)));
     }
 
+    // ------------------------------------------------------------------ #197 share sizing
+
+    /**
+     * The share becomes a quantity here, and the quantity accounts for what the order really costs.
+     *
+     * <p>Spendable cash is 100000 and the policies are 20 bps fee, 100 bps buffer, plus the fixed
+     * 5 bps slippage, so one share at 200 costs {@code 200 × 1.0125 = 202.50}. The whole share
+     * therefore affords {@code floor(100000 / 202.50) = 493}.
+     *
+     * <p>493 rather than 500 is the point. Sizing on the bare price would say 500, and 500 shares
+     * would cost 101250 — more than the partition has — so the reservation would fail after the
+     * order had already been accepted. Asserting 493 asserts that the fee, the buffer and the
+     * slippage are all inside the sizing.
+     */
+    @Test
+    void sizesAWholeShareAgainstTheTrueCostPerShare() {
+        UUID candidateId = composeAllocatedBuy("share-whole", 1, 1, new BigDecimal("200"));
+
+        assertAll(
+                () -> assertEquals("APPROVED", decisionOf(candidateId)),
+                () -> assertEquals(0, new BigDecimal("493").compareTo(finalQuantityOf(candidateId))),
+                () -> assertEquals(0, new BigDecimal("493").compareTo(requestedQuantityOf(candidateId))));
+    }
+
+    /** A quarter share claims a quarter of the same budget: floor(25000 / 202.50) = 123. */
+    @Test
+    void sizesAFractionalShareFromItsOwnSliceOfTheBudget() {
+        UUID candidateId = composeAllocatedBuy("share-quarter", 1, 4, new BigDecimal("200"));
+
+        assertAll(
+                () -> assertEquals("APPROVED", decisionOf(candidateId)),
+                () -> assertEquals(0, new BigDecimal("123").compareTo(finalQuantityOf(candidateId))));
+    }
+
+    /**
+     * The share stays an exact fraction until it meets the budget.
+     *
+     * <p>A third of 100000 at 101.25 per share affords {@code floor(33333.33… / 101.25) = 329}. Had
+     * the contract pre-divided {@code 1/3} into a decimal — 0.33 — the budget would have been 33000
+     * and the answer 325. The two integers exist so that cannot happen.
+     */
+    @Test
+    void keepsTheShareExactRatherThanPreDividingIt() {
+        UUID candidateId = composeAllocatedBuy("share-third", 1, 3, new BigDecimal("100"));
+
+        assertEquals(0, new BigDecimal("329").compareTo(finalQuantityOf(candidateId)));
+    }
+
+    /**
+     * Rounded down, never up. A whole share of 100000 at 101.25 affords 987.65…, and the 0.65 of a
+     * share is money the allocation was not given.
+     */
+    @Test
+    void roundsDownToWholeShares() {
+        UUID candidateId = composeAllocatedBuy("share-rounding", 1, 1, new BigDecimal("100"));
+
+        BigDecimal quantity = finalQuantityOf(candidateId);
+        assertAll(
+                () -> assertEquals(0, new BigDecimal("987").compareTo(quantity)),
+                () -> assertEquals(0, quantity.stripTrailingZeros().scale(),
+                        "no instrument is fractional-enabled, so a sized buy is whole shares"));
+    }
+
+    /** A share that cannot afford one whole share buys nothing, and says which budget ran out. */
+    @Test
+    void rejectsAShareThatAffordsNoWholeShare() {
+        UUID candidateId = composeAllocatedBuy("share-too-small", 1, 1, new BigDecimal("200000"));
+
+        assertAll(
+                () -> assertEquals("REJECTED", decisionOf(candidateId)),
+                () -> assertEquals("NO_AVAILABLE_SHARED_FUNDS", reasonOf(candidateId)),
+                () -> assertEquals(0, count(
+                        "select count(*) from trading.resource_reservations where intent_id = "
+                                + "(select id from trading.order_intents where intent_key = ?)",
+                        "candidate:" + candidateId)));
+    }
+
+    /**
+     * Without a complete valuation a share has nothing to be a share of, so F02's fail-closed rule
+     * applies to the sizing itself rather than only to the affordability check after it.
+     */
+    @Test
+    void rejectsAShareWhenTheBudgetIsNotValued() {
+        jdbc.sql("update trading.bot_budget_projections set valuation_status = 'STALE' "
+                        + "where bot_id = :bot")
+                .param("bot", FIXTURE_BOT)
+                .update();
+        try {
+            UUID candidateId = composeAllocatedBuy("share-unvalued", 1, 1, new BigDecimal("200"));
+
+            assertAll(
+                    () -> assertEquals("REJECTED", decisionOf(candidateId)),
+                    () -> assertEquals("POSITION_VALUATION_UNAVAILABLE", reasonOf(candidateId)));
+        } finally {
+            jdbc.sql("update trading.bot_budget_projections set valuation_status = 'VALUED' "
+                            + "where bot_id = :bot")
+                    .param("bot", FIXTURE_BOT)
+                    .update();
+        }
+    }
+
+    /** A version 3 sell states no size, and a bot holding nothing sells nothing. */
+    @Test
+    void rejectsASellWithNoOpenPosition() {
+        UUID batchId = derived("share-sell-empty");
+        UUID candidateId = derived("share-sell-empty-candidate");
+        CandidateBatch batch = adapter.toDomain(new OrderCandidateBatch(
+                OrderCandidateBatch.ALLOCATION_SCHEMA_VERSION,
+                batchId,
+                derived(batchId + "-evaluation"),
+                FIXTURE_BOT,
+                FIXTURE_PARTITION,
+                officialEventFor(batchId),
+                Instant.parse("2026-07-31T14:30:00Z"),
+                List.of(OrderCandidate.heldSell(
+                        candidateId, FIXTURE_INSTRUMENT, FIXTURE_FLOW, new BigDecimal("200"),
+                        List.of("EXIT")))));
+
+        ScopedCompositionResult result = composer.compose(batch);
+
+        assertAll(
+                () -> assertEquals(1, result.rejected()),
+                () -> assertEquals(0, result.ordersComposed()),
+                () -> assertEquals("NO_OPEN_POSITION", reasonOf(candidateId)));
+    }
+
+    /** Composing the same share-sized batch twice converges, as every other batch does. */
+    @Test
+    void aRedeliveredShareSizedBatchConverges() {
+        UUID batchId = derived("share-redelivery");
+        UUID candidateId = derived("share-redelivery-candidate");
+        CandidateBatch batch = allocatedBuyBatch(batchId, candidateId, 1, 2, new BigDecimal("200"));
+
+        ScopedCompositionResult first = composer.compose(batch);
+        ScopedCompositionResult again = composer.compose(batch);
+
+        assertAll(
+                () -> assertEquals(first.intentBatchId(), again.intentBatchId()),
+                () -> assertEquals(first.approved(), again.approved()),
+                () -> assertEquals(1, count(
+                        "select count(*) from trading.order_intents where batch_id = ?",
+                        first.intentBatchId())),
+                () -> assertEquals(1, count(
+                        "select count(*) from trading.resource_reservations r "
+                                + "join trading.order_intents i on i.id = r.intent_id "
+                                + "where i.batch_id = ?", first.intentBatchId())));
+    }
+
+    private UUID composeAllocatedBuy(
+            String seed, int numerator, int denominator, BigDecimal price) {
+        UUID candidateId = derived(seed + "-candidate");
+        composer.compose(allocatedBuyBatch(derived(seed), candidateId, numerator, denominator, price));
+        return candidateId;
+    }
+
+    /**
+     * A share-sized buy batch. The limit price doubles as the sizing mark, which is the composer's
+     * documented rule: a candidate naming a price is sized from it rather than from the latest fill.
+     */
+    private CandidateBatch allocatedBuyBatch(
+            UUID batchId, UUID candidateId, int numerator, int denominator, BigDecimal price) {
+        return adapter.toDomain(new OrderCandidateBatch(
+                OrderCandidateBatch.ALLOCATION_SCHEMA_VERSION,
+                batchId,
+                derived(batchId + "-evaluation"),
+                FIXTURE_BOT,
+                FIXTURE_PARTITION,
+                officialEventFor(batchId),
+                Instant.parse("2026-07-31T14:30:00Z"),
+                List.of(OrderCandidate.allocatedBuy(
+                        candidateId, FIXTURE_INSTRUMENT, FIXTURE_FLOW, numerator, denominator,
+                        price, List.of("BASIC_RULE_MATCHED")))));
+    }
+
+    /**
+     * The official bot event and evaluation run one batch needs, created once per batch.
+     *
+     * <p>Two canonical keys force this. {@code (bot_id, partition_id, source_event_id)} is the intent
+     * batch's unique key — the partition of one official event is the trading isolation boundary — so
+     * two batches sharing an event <em>are</em> the same batch and the store rightly refuses the
+     * second. And {@code order_intents} carries a composite foreign key to {@code evaluation_runs},
+     * so the evaluation a batch names has to exist as a row.
+     *
+     * <p>Both ids are derived from the batch id, so a redelivered batch reuses the same parents rather
+     * than creating a second set and quietly becoming a different batch.
+     */
+    private UUID officialEventFor(UUID batchId) {
+        UUID eventId = derived(batchId + "-bot-event");
+        jdbc.sql("""
+                        insert into bot.bot_events (id, bot_id, event_sequence, event_type,
+                            event_schema_version, correlation_id, idempotency_key, occurred_at,
+                            received_at, summary_document)
+                        values (:id, :bot,
+                            (select coalesce(max(event_sequence), 0) + 1 from bot.bot_events
+                              where bot_id = :bot),
+                            'ORDER_LIFECYCLE', 'v1', gen_random_uuid(), :key,
+                            '2026-07-31T14:30:00+00', '2026-07-31T14:30:00+00', '{}')
+                        on conflict (id) do nothing
+                        """)
+                .param("id", eventId)
+                .param("bot", FIXTURE_BOT)
+                .param("key", "rt4-197:" + eventId)
+                .update();
+        jdbc.sql("""
+                        insert into bot.evaluation_runs (id, bot_id, partition_id, flow_id,
+                            trigger_event_id, status, queued_at)
+                        values (:id, :bot, :partition, :flow, :event, 'RUNNING',
+                            '2026-07-31T14:30:00+00')
+                        on conflict (id) do nothing
+                        """)
+                .param("id", derived(batchId + "-evaluation"))
+                .param("bot", FIXTURE_BOT)
+                .param("partition", FIXTURE_PARTITION)
+                .param("flow", FIXTURE_FLOW)
+                .param("event", eventId)
+                .update();
+        return eventId;
+    }
+
+    private static UUID derived(String seed) {
+        return UUID.nameUUIDFromBytes(("rt4-197:" + seed).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String decisionOf(UUID candidateId) {
+        return text("select decision::text from trading.order_intents where intent_key = ?",
+                "candidate:" + candidateId);
+    }
+
+    private String reasonOf(UUID candidateId) {
+        return text("select decision_reason_code from trading.order_intents where intent_key = ?",
+                "candidate:" + candidateId);
+    }
+
+    private BigDecimal finalQuantityOf(UUID candidateId) {
+        return new BigDecimal(text(
+                "select final_quantity::text from trading.order_intents where intent_key = ?",
+                "candidate:" + candidateId));
+    }
+
+    private BigDecimal requestedQuantityOf(UUID candidateId) {
+        return new BigDecimal(text(
+                "select requested_quantity::text from trading.order_intents where intent_key = ?",
+                "candidate:" + candidateId));
+    }
+
     private long count(String sql, Object argument) {
         return jdbc.sql(sql).param(argument).query(Long.class).single();
     }
