@@ -39,6 +39,7 @@ public record OrderCandidate(
         BigDecimal quantity,
         Integer allocationNumerator,
         Integer allocationDenominator,
+        BigDecimal referencePrice,
         BigDecimal limitPrice,
         List<String> reasonCodes) {
 
@@ -52,6 +53,9 @@ public record OrderCandidate(
         if (limitPrice != null) {
             limitPrice = requirePositive(limitPrice, "limitPrice");
         }
+        if (referencePrice != null) {
+            referencePrice = requirePositive(referencePrice, "referencePrice");
+        }
         requireAllocation(side, quantity, allocationNumerator, allocationDenominator);
         reasonCodes = List.copyOf(Objects.requireNonNull(reasonCodes, "reasonCodes"));
     }
@@ -64,7 +68,7 @@ public record OrderCandidate(
             BigDecimal quantity,
             BigDecimal limitPrice,
             List<String> reasonCodes) {
-        this(candidateId, instrumentId, null, side, quantity, null, null, limitPrice, reasonCodes);
+        this(candidateId, instrumentId, null, side, quantity, null, null, null, limitPrice, reasonCodes);
     }
 
     /** The version 2 shape: the partition scope had arrived, the quantity had not yet left. */
@@ -76,21 +80,29 @@ public record OrderCandidate(
             BigDecimal quantity,
             BigDecimal limitPrice,
             List<String> reasonCodes) {
-        this(candidateId, instrumentId, flowId, side, quantity, null, null, limitPrice, reasonCodes);
+        this(candidateId, instrumentId, flowId, side, quantity, null, null, null, limitPrice, reasonCodes);
     }
 
-    /** A version 3 buy: the share of the partition's spendable cash this candidate claims. */
+    /**
+     * A version 3 buy: the share of the partition's spendable cash this candidate claims, and the
+     * price the evaluation decided on.
+     *
+     * <p>The reference price travels because it is the only mark that exists for an instrument no fill
+     * has ever touched, and it is what D's candidate carries for the same reason. It is not a limit:
+     * the order is still MARKET unless a limit is given separately.
+     */
     public static OrderCandidate allocatedBuy(
             UUID candidateId,
             UUID instrumentId,
             UUID flowId,
             int allocationNumerator,
             int allocationDenominator,
+            BigDecimal referencePrice,
             BigDecimal limitPrice,
             List<String> reasonCodes) {
         return new OrderCandidate(
                 candidateId, instrumentId, flowId, OrderSide.BUY, null,
-                allocationNumerator, allocationDenominator, limitPrice, reasonCodes);
+                allocationNumerator, allocationDenominator, referencePrice, limitPrice, reasonCodes);
     }
 
     /** A version 3 sell: sized from the position held, so it carries no measure of its own. */
@@ -98,11 +110,12 @@ public record OrderCandidate(
             UUID candidateId,
             UUID instrumentId,
             UUID flowId,
+            BigDecimal referencePrice,
             BigDecimal limitPrice,
             List<String> reasonCodes) {
         return new OrderCandidate(
                 candidateId, instrumentId, flowId, OrderSide.SELL, null, null, null,
-                limitPrice, reasonCodes);
+                referencePrice, limitPrice, reasonCodes);
     }
 
     /** The owning flow, present from schema version 2. */
