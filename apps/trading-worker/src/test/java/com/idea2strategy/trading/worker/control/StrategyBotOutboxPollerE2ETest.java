@@ -320,7 +320,9 @@ class StrategyBotOutboxPollerE2ETest {
     private final class RecordingLifecycle
             implements com.idea2strategy.trading.strategy.runtime.control.BotRuntimeLifecycle {
         @Override
-        public void start(LoadedExecutionPlan plan, Instant executionEligibleFrom) {
+        public void start(LoadedExecutionPlan plan,
+                com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup warmup,
+                Instant executionEligibleFrom) {
             lifecycleEvents.add("start:" + plan.botId());
         }
 
