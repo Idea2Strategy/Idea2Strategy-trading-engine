@@ -49,6 +49,7 @@ dependencies {
     // The pinned canonical baseline. Stores are being migrated to the canonical schema one at a
     // time, so this app's tests need both it and the private compatibility migrations standing.
     testImplementation(testFixtures(project(":modules:trading-persistence")))
+    testImplementation(testFixtures(project(":modules:trading-messaging")))
     testImplementation("org.springframework.boot:spring-boot-starter-flyway")
     testImplementation("com.fasterxml.jackson.core:jackson-databind")
     testImplementation("org.flywaydb:flyway-database-postgresql")
