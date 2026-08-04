@@ -42,8 +42,8 @@ class BasicPlanInterpreterTest {
         assertAll(
                 () -> assertEquals(1, plan.flows().size()),
                 () -> assertEquals("flow-1", plan.flows().getFirst().flowId()),
-                () -> assertEquals(BasicOrderSide.BUY, plan.side()),
-                () -> assertEquals("EQUAL", plan.allocation()),
+                // The side belongs to the flow, not the plan: a strategy has one container per side.
+                () -> assertEquals(BasicOrderSide.BUY, plan.flows().getFirst().side()),
                 () -> assertEquals(List.of(INSTRUMENT), plan.flows().getFirst().instrumentIds()),
                 () -> assertEquals(Map.of("flow-1", "partition-1"), plan.partitionKeyByFlowKey()),
                 () -> assertEquals(java.util.Set.of(INSTRUMENT), plan.subscribedInstruments()),
@@ -132,9 +132,15 @@ class BasicPlanInterpreterTest {
     @Test
     void refusesAPlanItCannotExecute() {
         assertAll(
+                // A version 2 document whose flows carry no steps: the version says the steps are
+                // per container, and there are none, so it is refused rather than falling back to
+                // the plan-level list a version 1 document would have.
                 () -> assertThrows(IllegalArgumentException.class,
                         () -> interpreter.interpret(planDocument("LT", "30", INSTRUMENT)
                                 .replace("basic-compiled-plan.v1", "basic-compiled-plan.v2"))),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> interpreter.interpret(planDocument("LT", "30", INSTRUMENT)
+                                .replace("basic-compiled-plan.v1", "basic-compiled-plan.v3"))),
                 () -> assertThrows(IllegalArgumentException.class,
                         () -> interpreter.interpret(planDocument("LT", "30", INSTRUMENT)
                                 .replace("\"RSI_14\"", "\"WILDERS_RSI_14\""))),
@@ -183,5 +189,110 @@ class BasicPlanInterpreterTest {
                 "planChecksum":"sha256:%s"}
                 """.formatted("3".repeat(64), ids, "2".repeat(64), "1".repeat(64), ids,
                         operator, threshold, "4".repeat(64));
+    }
+
+    /**
+     * Root #202: the ordinary Basic strategy — a buy container and a sell container over the same
+     * instrument, each an AND chain of its own blocks.
+     *
+     * <p>The buy container reads RSI_14 and buys below 30; the sell container reads the same feature and
+     * sells above 70. Version 1 had no shape for this, which is why the release refused it.
+     */
+    @Test
+    void readsOneContainerPerSideFromAVersionTwoPlan() {
+        var plan = interpreter.interpret(twoContainerPlanDocument());
+
+        assertAll(
+                () -> assertEquals(2, plan.flows().size()),
+                () -> assertEquals("buy", plan.flows().getFirst().flowId()),
+                () -> assertEquals(BasicOrderSide.BUY, plan.flows().getFirst().side()),
+                () -> assertEquals("sell", plan.flows().getLast().flowId()),
+                () -> assertEquals(BasicOrderSide.SELL, plan.flows().getLast().side()),
+                () -> assertEquals(Map.of("buy", "partition-1", "sell", "partition-1"),
+                        plan.partitionKeyByFlowKey()),
+                () -> assertEquals(java.util.Set.of(INSTRUMENT), plan.subscribedInstruments()),
+                // Each container keeps its own chain; the terminal step is consumed, never evaluated.
+                () -> assertEquals(2, plan.flows().getFirst().conditionSteps().size()),
+                () -> assertEquals(2, plan.flows().getLast().conditionSteps().size()));
+    }
+
+    /**
+     * The AND inside a container: three blocks, and the container decides only when all of them hold.
+     *
+     * <p>Asserted through the executor rather than the interpreter, because "AND" is a claim about
+     * evaluation. RSI 25 satisfies {@code < 30} and {@code < 40} but not {@code < 20}, so the container
+     * declines; RSI 15 satisfies all three and it emits.
+     */
+    @Test
+    void aContainerDecidesOnlyWhenEveryBlockInItHolds() {
+        var flow = interpreter.interpret(andChainPlanDocument()).flows().getFirst();
+
+        var declined = executor.execute(new BasicExecutionRequest(
+                EVALUATION, List.of(flow), Map.of(INSTRUMENT, input(INSTRUMENT, "25"))));
+        var emitted = executor.execute(new BasicExecutionRequest(
+                EVALUATION, List.of(flow), Map.of(INSTRUMENT, input(INSTRUMENT, "15"))));
+
+        assertAll(
+                () -> assertEquals(BasicDecisionStatus.CONDITION_NOT_MET,
+                        declined.decisions().getFirst().status(),
+                        "one unmet block is enough to decline the whole container"),
+                () -> assertEquals(BasicDecisionStatus.CANDIDATE,
+                        emitted.decisions().getFirst().status()));
+    }
+
+    private static String twoContainerPlanDocument() {
+        return """
+                {"contractVersion":"strategy-bot.v1","schemaVersion":"basic-compiled-plan.v2",\
+                "elementCatalogVersion":"basic-elements:2026-08-04",\
+                "instrumentCatalogVersion":"us-supported-universe:2026-08-04",\
+                "compilerVersion":"basic-compiler:1.0.0",\
+                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt1m",\
+                "featureId":"00000000-0000-4000-8000-000000000401","featureVersion":"1.0.0",\
+                "instruments":["%s"],"resolution":"PT1M","requiredObservations":14}],\
+                "executionSnapshot":{"immutableStrategyVersion":{\
+                "snapshotSchemaVersion":"basic-launch-snapshot.v1","semanticHash":"sha256:%s",\
+                "snapshotHash":"sha256:%s"},"mode":"BASIC","initialCashAmount":"100000.00000000",\
+                "currency":"USD","partitions":[{"key":"partition-1","budgetCapBps":10000,"flows":[\
+                {"key":"buy","officialInstrumentIds":["%s"],"steps":[\
+                {"sequence":1,"operation":"LOAD_FEATURE",\
+                "arguments":{"feature":"RSI_14","resolution":"1m"}},\
+                {"sequence":2,"operation":"COMPARE","arguments":{"operator":"LT","threshold":"30"}},\
+                {"sequence":3,"operation":"EMIT_ORDER_CANDIDATE",\
+                "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}]},\
+                {"key":"sell","officialInstrumentIds":["%s"],"steps":[\
+                {"sequence":1,"operation":"LOAD_FEATURE",\
+                "arguments":{"feature":"RSI_14","resolution":"1m"}},\
+                {"sequence":2,"operation":"COMPARE","arguments":{"operator":"GT","threshold":"70"}},\
+                {"sequence":3,"operation":"EMIT_ORDER_CANDIDATE",\
+                "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"SELL"}}]}]}]},\
+                "planChecksum":"sha256:%s"}"""
+                .formatted("3".repeat(64), INSTRUMENT, "2".repeat(64), "1".repeat(64),
+                        INSTRUMENT, INSTRUMENT, "4".repeat(64));
+    }
+
+    private static String andChainPlanDocument() {
+        return """
+                {"contractVersion":"strategy-bot.v1","schemaVersion":"basic-compiled-plan.v2",\
+                "elementCatalogVersion":"basic-elements:2026-08-04",\
+                "instrumentCatalogVersion":"us-supported-universe:2026-08-04",\
+                "compilerVersion":"basic-compiler:1.0.0",\
+                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt1m",\
+                "featureId":"00000000-0000-4000-8000-000000000401","featureVersion":"1.0.0",\
+                "instruments":["%s"],"resolution":"PT1M","requiredObservations":14}],\
+                "executionSnapshot":{"immutableStrategyVersion":{\
+                "snapshotSchemaVersion":"basic-launch-snapshot.v1","semanticHash":"sha256:%s",\
+                "snapshotHash":"sha256:%s"},"mode":"BASIC","initialCashAmount":"100000.00000000",\
+                "currency":"USD","partitions":[{"key":"partition-1","budgetCapBps":10000,"flows":[\
+                {"key":"buy","officialInstrumentIds":["%s"],"steps":[\
+                {"sequence":1,"operation":"LOAD_FEATURE",\
+                "arguments":{"feature":"RSI_14","resolution":"1m"}},\
+                {"sequence":2,"operation":"COMPARE","arguments":{"operator":"LT","threshold":"30"}},\
+                {"sequence":3,"operation":"COMPARE","arguments":{"operator":"LT","threshold":"40"}},\
+                {"sequence":4,"operation":"COMPARE","arguments":{"operator":"LT","threshold":"20"}},\
+                {"sequence":5,"operation":"EMIT_ORDER_CANDIDATE",\
+                "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}]}]}]},\
+                "planChecksum":"sha256:%s"}"""
+                .formatted("3".repeat(64), INSTRUMENT, "2".repeat(64), "1".repeat(64),
+                        INSTRUMENT, "4".repeat(64));
     }
 }
