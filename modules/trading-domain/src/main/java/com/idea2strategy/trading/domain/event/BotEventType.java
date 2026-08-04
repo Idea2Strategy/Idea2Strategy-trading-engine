@@ -42,6 +42,8 @@ public enum BotEventType {
     RESERVATION_SETTLED,
     /** A double-entry transaction was posted to the official ledger. */
     LEDGER_TRANSACTION_POSTED,
+    /** A room evaluation's locked initial cash was posted to the official ledger. */
+    INITIAL_CAPITAL_POSTED,
     /** Borrow fee was accrued against an open short lot. */
     SHORT_BORROW_FEE_ACCRUED,
     /** The platform generated a forced close for a bot stop, risk breach or competition end. */

@@ -42,6 +42,7 @@ dependencies {
     implementation(project(":modules:trading-persistence"))
     implementation(project(":modules:trading-messaging"))
     implementation("io.lettuce:lettuce-core")
+    implementation("com.fasterxml.jackson.core:jackson-databind")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-jooq")

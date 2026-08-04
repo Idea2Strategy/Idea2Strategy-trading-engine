@@ -290,22 +290,19 @@ class LedgerPersistenceTest {
         assertEquals(1, query.countTransactions());
     }
 
-    /**
-     * The same posting written bot wide is not protected that way, and this records it rather than
-     * pretending otherwise. Closing the gap means either scoping the posting to a partition or
-     * adding canonical DDL, and the second is behind an authority gate.
-     */
+    /** Root #181's direct transaction FK closes the nullable composite-FK gap for bot-wide cash. */
     @Test
-    void aBotWideHeaderIsNotHeldInPlaceByTheCompositeKey() {
+    void aBotWideHeaderCannotBeDeletedWhileItsEntriesRemain() {
         LedgerTransaction posting = standard(EVENTS.get(0), new BigDecimal("42"));
         store.append(PostLedgerTransactionCommand.botWide(BOT, posting));
 
-        jdbc.sql("delete from trading.ledger_transactions where id = :id")
+        assertThrows(DataAccessException.class, () -> jdbc
+                .sql("delete from trading.ledger_transactions where id = :id")
                 .param("id", posting.transactionId())
-                .update();
+                .update());
 
-        assertEquals(0, query.countTransactions());
-        assertEquals(2, query.countEntries(), "the canonical composite key did not reach a NULL partition");
+        assertEquals(1, query.countTransactions());
+        assertEquals(2, query.countEntries());
     }
 
     /**

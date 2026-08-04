@@ -16,6 +16,9 @@ trading:
     enabled: false
   runtime:
     shutdown-drain-timeout: PT30S
+  room-account-open:
+    # Deployment must opt in only after the E request/result SQS routes and shared DB migration exist.
+    enabled: ${TRADING_ROOM_ACCOUNT_OPEN_ENABLED:false}
 
 # When trading.market-events.redis-uri is configured, the worker reads both the event stream and the
 # gateway-owned availability projection from the same key prefix. The projection is fail-closed and
