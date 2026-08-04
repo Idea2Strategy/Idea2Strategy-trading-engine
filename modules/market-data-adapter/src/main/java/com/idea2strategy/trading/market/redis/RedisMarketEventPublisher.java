@@ -157,15 +157,25 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
             end
             local stored_sequence = redis.call('HGET', KEYS[1], 'marketSequence')
             local stored_observed_at = redis.call('HGET', KEYS[1], 'observedAt')
+            local stored_epoch_second = redis.call('HGET', KEYS[1], 'observedAtEpochSecond')
+            local stored_nano = redis.call('HGET', KEYS[1], 'observedAtNano')
             if stored_sequence ~= false then
               if tonumber(ARGV[3]) < tonumber(stored_sequence) then return 0 end
-              if tonumber(ARGV[3]) == tonumber(stored_sequence)
-                  and stored_observed_at ~= false and ARGV[4] <= stored_observed_at then return 0 end
+              if tonumber(ARGV[3]) == tonumber(stored_sequence) then
+                if stored_epoch_second ~= false and stored_nano ~= false then
+                  if tonumber(ARGV[5]) < tonumber(stored_epoch_second) then return 0 end
+                  if tonumber(ARGV[5]) == tonumber(stored_epoch_second)
+                      and tonumber(ARGV[6]) <= tonumber(stored_nano) then return 0 end
+                elseif stored_observed_at ~= false and ARGV[4] == stored_observed_at then
+                  return 0
+                end
+              end
             end
             redis.call('HSET', KEYS[1],
               'schemaVersion', ARGV[1], 'instrumentId', ARGV[2],
               'marketSequence', ARGV[3], 'observedAt', ARGV[4],
-              'status', ARGV[5], 'evaluationAllowed', ARGV[6], 'reasons', ARGV[7])
+              'observedAtEpochSecond', ARGV[5], 'observedAtNano', ARGV[6],
+              'status', ARGV[7], 'evaluationAllowed', ARGV[8], 'reasons', ARGV[9])
             return 1
             """;
 
@@ -266,6 +276,8 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
                 projection.instrumentId().toString(),
                 Long.toString(projection.marketSequence()),
                 projection.observedAt().toString(),
+                Long.toString(projection.observedAt().getEpochSecond()),
+                Integer.toString(projection.observedAt().getNano()),
                 projection.status().name(),
                 Boolean.toString(projection.evaluationAllowed()),
                 reasons);

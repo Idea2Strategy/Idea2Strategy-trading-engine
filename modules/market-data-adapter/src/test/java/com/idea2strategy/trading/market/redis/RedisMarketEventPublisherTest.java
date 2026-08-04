@@ -141,6 +141,50 @@ class RedisMarketEventPublisherTest {
         }
     }
 
+    @Test
+    void availabilityProjectionOrdersFractionalInstantsWithinTheSameSecond() {
+        try (RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(redisUri(), prefix())) {
+            Instant wholeSecond = Instant.parse("2026-08-01T14:31:00Z");
+            Instant fractionallyLater = Instant.parse("2026-08-01T14:31:00.100Z");
+
+            assertTrue(publisher.publishAvailability(AAPL_ID, 42, wholeSecond, available()));
+            assertTrue(publisher.publishAvailability(AAPL_ID, 42, fractionallyLater, degraded()));
+            assertFalse(publisher.publishAvailability(
+                    AAPL_ID, 42, Instant.parse("2026-08-01T14:31:00.050Z"), available()));
+
+            var stored = publisher.findAvailability(AAPL_ID).orElseThrow();
+            assertEquals(fractionallyLater, stored.observedAt());
+            assertEquals(MarketDataAvailabilityStatus.DEGRADED, stored.status());
+        }
+    }
+
+    @Test
+    void availabilityProjectionUpgradesAHashWithoutNumericTimeFields() {
+        String prefix = prefix();
+        try (RedisClient client = RedisClient.create(redisUri());
+                var connection = client.connect();
+                RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(redisUri(), prefix)) {
+            connection.sync().hset(publisher.availabilityKey(AAPL_ID), Map.of(
+                    "schemaVersion", "1",
+                    "instrumentId", AAPL_ID.toString(),
+                    "marketSequence", "42",
+                    "observedAt", "2026-08-01T14:31:00Z",
+                    "status", "AVAILABLE",
+                    "evaluationAllowed", "true",
+                    "reasons", ""));
+
+            Instant refreshed = Instant.parse("2026-08-01T14:31:00.100Z");
+            assertTrue(publisher.publishAvailability(AAPL_ID, 42, refreshed, degraded()));
+
+            Map<String, String> upgraded = connection.sync().hgetall(publisher.availabilityKey(AAPL_ID));
+            assertEquals(Long.toString(refreshed.getEpochSecond()), upgraded.get("observedAtEpochSecond"));
+            assertEquals(Integer.toString(refreshed.getNano()), upgraded.get("observedAtNano"));
+            assertEquals(
+                    MarketDataAvailabilityStatus.DEGRADED,
+                    publisher.findAvailability(AAPL_ID).orElseThrow().status());
+        }
+    }
+
     private static MarketDataAvailabilityResult available() {
         return new MarketDataAvailabilityResult(
                 MarketDataAvailabilityStatus.AVAILABLE, true, true, Set.of(), List.of());

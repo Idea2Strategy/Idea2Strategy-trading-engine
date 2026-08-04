@@ -138,8 +138,10 @@ class RedisMarketEventPublisherUnitTest {
         assertEquals(List.of("{unit-test:market}:availability:" + AAPL_ID), List.of(keys.getValue()));
         assertEquals("42", arguments.getValue()[2]);
         assertEquals(observedAt.toString(), arguments.getValue()[3]);
-        assertEquals("AVAILABLE", arguments.getValue()[4]);
-        assertEquals("true", arguments.getValue()[5]);
+        assertEquals(Long.toString(observedAt.getEpochSecond()), arguments.getValue()[4]);
+        assertEquals(Integer.toString(observedAt.getNano()), arguments.getValue()[5]);
+        assertEquals("AVAILABLE", arguments.getValue()[6]);
+        assertEquals("true", arguments.getValue()[7]);
     }
 
     @Test
