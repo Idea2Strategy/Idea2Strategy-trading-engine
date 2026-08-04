@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.idea2strategy.trading.market.alpaca.MarketEventHandlingResult;
+import com.idea2strategy.trading.market.availability.MarketDataAvailabilityProjection;
+import com.idea2strategy.trading.market.availability.MarketDataAvailabilityResult;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
 import com.idea2strategy.trading.messaging.market.MarketEventType;
 import io.lettuce.core.RedisClient;
@@ -148,6 +150,25 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
               latest_occurred_at}
             """;
 
+    private static final String AVAILABILITY_SCRIPT = """
+            local actual = redis.call('TYPE', KEYS[1]).ok
+            if actual ~= 'none' and actual ~= 'hash' then
+              return redis.error_reply('WRONGTYPE availability key must be hash')
+            end
+            local stored_sequence = redis.call('HGET', KEYS[1], 'marketSequence')
+            local stored_observed_at = redis.call('HGET', KEYS[1], 'observedAt')
+            if stored_sequence ~= false then
+              if tonumber(ARGV[3]) < tonumber(stored_sequence) then return 0 end
+              if tonumber(ARGV[3]) == tonumber(stored_sequence)
+                  and stored_observed_at ~= false and ARGV[4] <= stored_observed_at then return 0 end
+            end
+            redis.call('HSET', KEYS[1],
+              'schemaVersion', ARGV[1], 'instrumentId', ARGV[2],
+              'marketSequence', ARGV[3], 'observedAt', ARGV[4],
+              'status', ARGV[5], 'evaluationAllowed', ARGV[6], 'reasons', ARGV[7])
+            return 1
+            """;
+
     private final RedisClient client;
     private final StatefulRedisConnection<String, String> connection;
     private final RedisCommands<String, String> commands;
@@ -228,6 +249,34 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         return commands.xlen(streamKey());
     }
 
+    /** Publishes the gateway's C09 result; older or duplicate observations cannot overwrite it. */
+    public boolean publishAvailability(
+            UUID instrumentId, long marketSequence, Instant observedAt, MarketDataAvailabilityResult result) {
+        MarketDataAvailabilityProjection projection =
+                MarketDataAvailabilityProjection.from(instrumentId, marketSequence, observedAt, result);
+        String reasons = projection.reasons().stream()
+                .map(Enum::name)
+                .sorted()
+                .collect(java.util.stream.Collectors.joining(","));
+        Object updated = commands.eval(
+                AVAILABILITY_SCRIPT,
+                ScriptOutputType.INTEGER,
+                new String[] {availabilityKey(instrumentId)},
+                Integer.toString(projection.schemaVersion()),
+                projection.instrumentId().toString(),
+                Long.toString(projection.marketSequence()),
+                projection.observedAt().toString(),
+                projection.status().name(),
+                Boolean.toString(projection.evaluationAllowed()),
+                reasons);
+        return number(updated) == 1;
+    }
+
+    public Optional<MarketDataAvailabilityProjection> findAvailability(UUID instrumentId) {
+        Map<String, String> fields = commands.hgetall(availabilityKey(instrumentId));
+        return fields.isEmpty() ? Optional.empty() : Optional.of(MarketDataAvailabilityEntry.decode(fields));
+    }
+
     public ConsumerLagMeasurement measureConsumerLag(String consumerGroup) {
         if (consumerGroup == null || consumerGroup.isBlank()) {
             throw new IllegalArgumentException("consumerGroup must not be blank");
@@ -261,6 +310,16 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         Objects.requireNonNull(instrumentId, "instrumentId");
         Objects.requireNonNull(eventType, "eventType");
         return keyBase + ":latest:" + instrumentId + ":" + eventType.name();
+    }
+
+    public String availabilityKey(UUID instrumentId) {
+        Objects.requireNonNull(instrumentId, "instrumentId");
+        return keyBase + ":availability:" + instrumentId;
+    }
+
+    public static String availabilityKey(String keyPrefix, UUID instrumentId) {
+        Objects.requireNonNull(instrumentId, "instrumentId");
+        return keyBase(keyPrefix) + ":availability:" + instrumentId;
     }
 
     @Override

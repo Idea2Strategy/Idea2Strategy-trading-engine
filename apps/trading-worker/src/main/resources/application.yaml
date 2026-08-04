@@ -14,3 +14,12 @@ spring:
 trading:
   fake-candidate:
     enabled: false
+
+# When trading.market-events.redis-uri is configured, the worker reads both the event stream and the
+# gateway-owned availability projection from the same key prefix. The projection is fail-closed and
+# must be refreshed within maximum-availability-age (default PT2M).
+# trading:
+#   market-events:
+#     redis-uri: redis://redis:6379
+#     redis-key-prefix: i2s
+#     maximum-availability-age: PT2M

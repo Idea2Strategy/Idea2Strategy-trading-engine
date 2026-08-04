@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.idea2strategy.trading.market.alpaca.ProviderRightsUnavailableException;
+import com.idea2strategy.trading.market.availability.MarketDataAvailabilityStatus;
 import com.idea2strategy.trading.market.redis.RedisMarketEventPublisher;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
 import com.idea2strategy.trading.messaging.market.MarketEventType;
@@ -77,6 +78,10 @@ class MarketGatewayPublishingE2ETest {
                                 "close", new BigDecimal("210.20"),
                                 "volume", new BigDecimal("2500")),
                         latest.values());
+                var availability = publisher.findAvailability(AAPL_ID).orElseThrow();
+                assertEquals(latest.sequence(), availability.marketSequence());
+                assertEquals(MarketDataAvailabilityStatus.AVAILABLE, availability.status());
+                assertTrue(availability.evaluationAllowed());
 
                 assertEquals(2, server.connections.get());
                 assertTrue(server.received.stream().anyMatch(frame ->

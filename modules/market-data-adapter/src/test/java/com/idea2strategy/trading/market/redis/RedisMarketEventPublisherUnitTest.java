@@ -14,6 +14,8 @@ import com.idea2strategy.trading.market.alpaca.AlpacaMarketEventNormalizer;
 import com.idea2strategy.trading.market.alpaca.AlpacaMarketInput;
 import com.idea2strategy.trading.market.alpaca.MarketEventHandlingResult;
 import com.idea2strategy.trading.market.alpaca.MarketEventOrderingProcessor;
+import com.idea2strategy.trading.market.availability.MarketDataAvailabilityResult;
+import com.idea2strategy.trading.market.availability.MarketDataAvailabilityStatus;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
 import com.idea2strategy.trading.messaging.market.MarketEventType;
 import io.lettuce.core.ScriptOutputType;
@@ -24,6 +26,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -108,6 +111,53 @@ class RedisMarketEventPublisherUnitTest {
 
         assertEquals(42, latest.sequence());
         assertEquals(new BigDecimal("210.1200"), latest.values().get("price"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void publishesAvailabilityThroughTheMonotonicAtomicProjection() {
+        doReturn(1L).when(commands).eval(
+                anyString(), eq(ScriptOutputType.INTEGER), any(String[].class), any(String[].class));
+        Instant observedAt = Instant.parse("2026-08-01T14:31:00Z");
+
+        boolean updated = publisher.publishAvailability(
+                AAPL_ID,
+                42,
+                observedAt,
+                new MarketDataAvailabilityResult(
+                        MarketDataAvailabilityStatus.AVAILABLE,
+                        true,
+                        true,
+                        Set.of(),
+                        List.of()));
+
+        ArgumentCaptor<String[]> keys = ArgumentCaptor.forClass(String[].class);
+        ArgumentCaptor<String[]> arguments = ArgumentCaptor.forClass(String[].class);
+        verify(commands).eval(anyString(), eq(ScriptOutputType.INTEGER), keys.capture(), arguments.capture());
+        assertEquals(true, updated);
+        assertEquals(List.of("{unit-test:market}:availability:" + AAPL_ID), List.of(keys.getValue()));
+        assertEquals("42", arguments.getValue()[2]);
+        assertEquals(observedAt.toString(), arguments.getValue()[3]);
+        assertEquals("AVAILABLE", arguments.getValue()[4]);
+        assertEquals("true", arguments.getValue()[5]);
+    }
+
+    @Test
+    void readsTheGatewayAvailabilityResultByInstrument() {
+        when(commands.hgetall("{unit-test:market}:availability:" + AAPL_ID)).thenReturn(Map.of(
+                "schemaVersion", "1",
+                "instrumentId", AAPL_ID.toString(),
+                "marketSequence", "42",
+                "observedAt", "2026-08-01T14:31:00Z",
+                "status", "AVAILABLE",
+                "evaluationAllowed", "true",
+                "reasons", ""));
+
+        var projection = publisher.findAvailability(AAPL_ID).orElseThrow();
+
+        assertEquals(AAPL_ID, projection.instrumentId());
+        assertEquals(42, projection.marketSequence());
+        assertEquals(true, projection.evaluationAllowed());
     }
 
     @Test
