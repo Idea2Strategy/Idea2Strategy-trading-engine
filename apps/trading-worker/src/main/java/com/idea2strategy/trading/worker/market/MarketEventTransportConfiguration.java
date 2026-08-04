@@ -1,5 +1,6 @@
 package com.idea2strategy.trading.worker.market;
 
+import com.idea2strategy.trading.worker.lifecycle.RuntimeIntakeGate;
 import com.idea2strategy.trading.worker.runtime.EvaluatingBotRuntime;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
@@ -71,8 +72,9 @@ public class MarketEventTransportConfiguration {
     }
 
     @Bean
-    MarketEventPollingWorker marketEventPollingWorker(RedisMarketEventStreamConsumer consumer) {
-        return new MarketEventPollingWorker(consumer);
+    MarketEventPollingWorker marketEventPollingWorker(
+            RedisMarketEventStreamConsumer consumer, RuntimeIntakeGate intakeGate) {
+        return new MarketEventPollingWorker(consumer, intakeGate);
     }
 
     /**
@@ -83,14 +85,17 @@ public class MarketEventTransportConfiguration {
      */
     public static final class MarketEventPollingWorker {
         private final RedisMarketEventStreamConsumer consumer;
+        private final RuntimeIntakeGate intakeGate;
 
-        MarketEventPollingWorker(RedisMarketEventStreamConsumer consumer) {
+        MarketEventPollingWorker(
+                RedisMarketEventStreamConsumer consumer, RuntimeIntakeGate intakeGate) {
             this.consumer = consumer;
+            this.intakeGate = intakeGate;
         }
 
         @Scheduled(fixedDelayString = "${trading.market-events.poll-delay:PT0.2S}")
         public void poll() {
-            consumer.pollOnce();
+            intakeGate.runIfOpen(consumer::pollOnce);
         }
     }
 }

@@ -14,6 +14,8 @@ spring:
 trading:
   fake-candidate:
     enabled: false
+  runtime:
+    shutdown-drain-timeout: PT30S
 
 # When trading.market-events.redis-uri is configured, the worker reads both the event stream and the
 # gateway-owned availability projection from the same key prefix. The projection is fail-closed and
