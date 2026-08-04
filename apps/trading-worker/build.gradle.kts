@@ -40,6 +40,7 @@ dependencies {
     implementation(project(":modules:market-data-adapter"))
     implementation(project(":modules:trading-persistence"))
     implementation(project(":modules:trading-messaging"))
+    implementation("io.lettuce:lettuce-core")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-jooq")
@@ -56,5 +57,6 @@ dependencies {
     testImplementation(platform("org.testcontainers:testcontainers-bom:1.21.4"))
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:postgresql")
+    testImplementation("org.testcontainers:testcontainers")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

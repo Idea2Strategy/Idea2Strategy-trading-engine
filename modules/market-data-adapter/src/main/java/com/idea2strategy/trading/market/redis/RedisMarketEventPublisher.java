@@ -278,25 +278,9 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         return (List<Object>) commands.eval(script, ScriptOutputType.MULTI, keys, values);
     }
 
+    /** One decoder for the layout this class writes; see {@link MarketEventStreamEntry}. */
     private MarketEventEnvelope toEnvelope(Map<String, String> fields) {
-        try {
-            return new MarketEventEnvelope(
-                    required(fields, "eventId"),
-                    Integer.parseInt(required(fields, "schemaVersion")),
-                    UUID.fromString(required(fields, "instrumentId")),
-                    required(fields, "provider"),
-                    required(fields, "feed"),
-                    MarketEventType.valueOf(required(fields, "eventType")),
-                    required(fields, "providerEventId"),
-                    Instant.parse(required(fields, "occurredAt")),
-                    Instant.parse(required(fields, "receivedAt")),
-                    Long.parseLong(required(fields, "sequence")),
-                    Integer.parseInt(required(fields, "revision")),
-                    emptyToNull(fields.get("correctionOfEventId")),
-                    objectMapper.readValue(required(fields, "values"), VALUES_TYPE));
-        } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("latest market event values are not valid JSON", exception);
-        }
+        return MarketEventStreamEntry.decode(fields);
     }
 
     private String serializeValues(Map<String, BigDecimal> values) {
