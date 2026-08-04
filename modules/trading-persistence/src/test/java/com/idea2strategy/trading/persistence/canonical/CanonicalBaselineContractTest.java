@@ -58,6 +58,17 @@ class CanonicalBaselineContractTest {
     }
 
     @Test
+    void theBaselineIncludesTheBacktestRuntimeOwnershipMigrations() {
+        assertTrue(
+                CanonicalBaseline.presentMigrations().containsAll(List.of(
+                        "V20260804160000__backtest_runtime_ownership_expand.sql",
+                        "V20260804160010__backend_backtest_competition_link.sql",
+                        "V20260804160020__pipeline_dataset_manifest_empty_hash.sql",
+                        "V20260804160100__backtest_runtime_ownership_constrain.sql")),
+                "the pinned baseline must include the central backtest runtime ownership migration set");
+    }
+
+    @Test
     void theBaselineStandsUpTheWholeCanonicalSchema() {
         int tables = jdbc.sql("""
                         select count(*) from information_schema.tables
@@ -66,7 +77,7 @@ class CanonicalBaselineContractTest {
                 .param(APPLICATION_SCHEMAS.toArray(String[]::new))
                 .query(Integer.class)
                 .single();
-        assertEquals(174, tables, "the pinned canonical baseline no longer produces the canonical schema");
+        assertEquals(177, tables, "the pinned canonical baseline no longer produces the canonical schema");
     }
 
     @Test
