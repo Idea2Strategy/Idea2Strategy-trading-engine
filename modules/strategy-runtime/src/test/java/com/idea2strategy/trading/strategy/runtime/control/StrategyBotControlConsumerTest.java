@@ -436,6 +436,7 @@ class StrategyBotControlConsumerTest {
         private int stops;
         private LoadedExecutionPlan loadedPlan;
         private PreparedWarmup receivedWarmup;
+        private EvaluationWindow receivedWindow;
         private final List<String> events;
 
         private RecordingLifecycle() {
@@ -449,9 +450,10 @@ class StrategyBotControlConsumerTest {
         @Override
         public void start(LoadedExecutionPlan plan,
                 com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup warmup,
-                Instant executionEligibleFrom) {
+                EvaluationWindow window) {
             events.add("start");
             receivedWarmup = warmup;
+            receivedWindow = window;
             starts++;
             loadedPlan = plan;
         }

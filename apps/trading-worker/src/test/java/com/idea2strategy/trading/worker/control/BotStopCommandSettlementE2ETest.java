@@ -521,7 +521,7 @@ class BotStopCommandSettlementE2ETest {
             @Override
             public void start(LoadedExecutionPlan plan,
                 com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup warmup,
-                Instant executionEligibleFrom) {
+                com.idea2strategy.trading.strategy.runtime.control.EvaluationWindow window) {
                 throw new UnsupportedOperationException("no run command is delivered here");
             }
 
