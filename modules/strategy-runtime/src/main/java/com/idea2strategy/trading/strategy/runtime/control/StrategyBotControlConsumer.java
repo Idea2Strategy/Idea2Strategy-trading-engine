@@ -88,7 +88,7 @@ public final class StrategyBotControlConsumer implements BotEvaluationGate {
         WarmupRequest warmupRequest = new WarmupRequest(
                 run.botId(), loaded.releaseId(), run.executionEligibleFrom(), compiledPlan.warmupRequirements());
         warmupGate.start(warmupRequest,
-                prepared -> lifecycle.start(loaded, prepared, run.executionEligibleFrom()));
+                prepared -> lifecycle.start(loaded, prepared, run.window()));
         checkpointStore.save(current.transition(
                 BotControlStatus.RUNNING,
                 compiledPlan.snapshotHash(),

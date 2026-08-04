@@ -26,7 +26,13 @@ record StrategyBotRunCommand(
         StrategyBotMetadata metadata,
         UUID botId,
         String expectedSnapshotHash,
-        Instant executionEligibleFrom) implements StrategyBotCommand {
+        Instant executionEligibleFrom,
+        /** The room schedule's evaluation end, absent for a bot no schedule bounds. */
+        Instant executionEligibleUntil) implements StrategyBotCommand {
+
+    EvaluationWindow window() {
+        return new EvaluationWindow(executionEligibleFrom, executionEligibleUntil);
+    }
 }
 
 record StrategyBotStopCommand(

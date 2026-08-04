@@ -9,6 +9,7 @@ import com.idea2strategy.trading.application.candidate.CandidateBatchProcessingR
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
 import com.idea2strategy.trading.messaging.market.MarketEventType;
 import com.idea2strategy.trading.persistence.canonical.CanonicalBaseline;
+import com.idea2strategy.trading.strategy.runtime.control.EvaluationWindow;
 import com.idea2strategy.trading.strategy.runtime.plan.LoadedExecutionPlan;
 import com.idea2strategy.trading.strategy.runtime.warmup.FeatureObservation;
 import com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup;
@@ -109,7 +110,7 @@ class EvaluationLoopE2ETest {
 
     @Test
     void aStartedBotTurnsAMarketEventIntoACanonicalOrder() {
-        runtime.start(plan(), warmup(), ELIGIBLE_FROM);
+        runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
         assertTrue(runtime.isEvaluating(BOT));
 
         List<CandidateBatchProcessingResult> results = runtime.feed(event(1, "84"));
@@ -149,7 +150,7 @@ class EvaluationLoopE2ETest {
      */
     @Test
     void aRedeliveredOrLateMarketEventChangesNothing() {
-        runtime.start(plan(), warmup(), ELIGIBLE_FROM);
+        runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
 
         MarketEventEnvelope event = event(20, "84");
         List<CandidateBatchProcessingResult> first = runtime.feed(event);
@@ -170,16 +171,61 @@ class EvaluationLoopE2ETest {
     /** An event before the bot's eligibility instant is not its concern: a room bot waits. */
     @Test
     void anEventBeforeEligibilityIsNotEvaluated() {
-        runtime.start(plan(), warmup(), EVENT_AT.plusSeconds(3600));
+        runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(EVENT_AT.plusSeconds(3600)));
 
         assertTrue(runtime.feed(event(3, "84")).isEmpty());
         assertEquals(0, count("select count(*) from trading.order_intents where bot_id = ?", BOT));
     }
 
+    /**
+     * C93: a room bot stops deciding when its room's evaluation window closes, whether or not the stop
+     * command has arrived yet.
+     *
+     * <p>This is the boundary that matters, because everything past it is indistinguishable in the
+     * canonical record from a trade that belongs to the room. Enforcing it here rather than waiting for
+     * B's scheduler means a late stop delays the settlement, not the boundary.
+     *
+     * <p>The end is exclusive: an event stamped exactly at it is the first one outside the window.
+     */
+    @Test
+    void aRoomBotDoesNotEvaluateAtOrAfterItsEvaluationWindowEnds() {
+        runtime.start(plan(), warmup(), new EvaluationWindow(ELIGIBLE_FROM, EVENT_AT));
+
+        List<CandidateBatchProcessingResult> atTheEnd = runtime.feed(event(6, "84"));
+        List<CandidateBatchProcessingResult> afterTheEnd = runtime.feed(
+                eventAt(7, "83", EVENT_AT.plusSeconds(60)));
+
+        assertAll(
+                () -> assertTrue(atTheEnd.isEmpty(), "the closing instant is already outside"),
+                () -> assertTrue(afterTheEnd.isEmpty()),
+                () -> assertTrue(runtime.isEvaluating(BOT),
+                        "still registered: the window closing is not the stop, which settles separately"),
+                () -> assertEquals(0, count(
+                        "select count(*) from trading.order_intents where bot_id = ?", BOT),
+                        "nothing past the room's end reached the ledger its performance is read from"),
+                () -> assertEquals(0, count(
+                        "select count(*) from bot.evaluation_runs where bot_id = ?", BOT),
+                        "and no judgment was recorded either"));
+    }
+
+    /** The same bot, one bar earlier, does decide — so the case above is a boundary, not a dead plan. */
+    @Test
+    void aRoomBotStillEvaluatesInsideItsEvaluationWindow() {
+        runtime.start(plan(), warmup(), new EvaluationWindow(ELIGIBLE_FROM, EVENT_AT.plusSeconds(60)));
+
+        List<CandidateBatchProcessingResult> inside = runtime.feed(event(8, "84"));
+
+        assertAll(
+                () -> assertEquals(1, inside.size()),
+                () -> assertEquals(CandidateBatchProcessingResult.PROCESSED, inside.getFirst()),
+                () -> assertEquals(1, count(
+                        "select count(*) from trading.order_intents where bot_id = ?", BOT)));
+    }
+
     /** A stopped bot evaluates nothing, whatever the market does. */
     @Test
     void aStoppedBotEvaluatesNothing() {
-        runtime.start(plan(), warmup(), ELIGIBLE_FROM);
+        runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
         runtime.stop(BOT, "USER_REQUESTED");
 
         assertFalse(runtime.isEvaluating(BOT));
@@ -193,7 +239,7 @@ class EvaluationLoopE2ETest {
      */
     @Test
     void withoutAWarmedWindowTheSameEventProducesNoCandidate() {
-        runtime.start(plan(), null, ELIGIBLE_FROM);
+        runtime.start(plan(), null, EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
 
         assertTrue(runtime.feed(event(5, "84")).isEmpty());
         assertEquals(0, count("select count(*) from trading.order_intents where bot_id = ?", BOT));
@@ -202,7 +248,7 @@ class EvaluationLoopE2ETest {
     /** An instrument the plan does not subscribe to is ignored rather than mis-evaluated. */
     @Test
     void anUnsubscribedInstrumentIsIgnored() {
-        runtime.start(plan(), warmup(), ELIGIBLE_FROM);
+        runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
 
         MarketEventEnvelope other = new MarketEventEnvelope(
                 "market-other", 1, UUID.fromString("c2000000-0000-4000-8000-0000000000ff"),
@@ -240,9 +286,13 @@ class EvaluationLoopE2ETest {
     }
 
     private MarketEventEnvelope event(long sequence, String close) {
+        return eventAt(sequence, close, EVENT_AT);
+    }
+
+    private MarketEventEnvelope eventAt(long sequence, String close, Instant observedAt) {
         return new MarketEventEnvelope(
                 "market-" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.BAR_1M,
-                "provider-" + sequence, EVENT_AT, EVENT_AT, sequence, 0, null,
+                "provider-" + sequence, observedAt, observedAt, sequence, 0, null,
                 Map.of("close", new BigDecimal(close)));
     }
 

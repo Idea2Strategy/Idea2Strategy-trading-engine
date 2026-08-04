@@ -16,6 +16,7 @@ import com.idea2strategy.trading.strategy.runtime.candidate.BasicCandidateConver
 import com.idea2strategy.trading.strategy.runtime.candidate.BasicCandidateConverger;
 import com.idea2strategy.trading.strategy.runtime.candidate.BasicOrderCandidate;
 import com.idea2strategy.trading.strategy.runtime.control.BotRuntimeLifecycle;
+import com.idea2strategy.trading.strategy.runtime.control.EvaluationWindow;
 import com.idea2strategy.trading.strategy.runtime.feature.BoundedWindowFeatureCalculator;
 import com.idea2strategy.trading.strategy.runtime.feature.OfficialFeatureCatalog;
 import com.idea2strategy.trading.strategy.runtime.incremental.IncrementalFeatureSnapshot;
@@ -98,9 +99,9 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
     }
 
     @Override
-    public void start(LoadedExecutionPlan plan, PreparedWarmup warmup, Instant executionEligibleFrom) {
+    public void start(LoadedExecutionPlan plan, PreparedWarmup warmup, EvaluationWindow window) {
         Objects.requireNonNull(plan, "plan");
-        Objects.requireNonNull(executionEligibleFrom, "executionEligibleFrom");
+        Objects.requireNonNull(window, "window");
         var interpreted = interpreter.interpret(plan.planPayload());
         var calculator = new BoundedWindowFeatureCalculator(OfficialFeatureCatalog.RSI_14);
         var features = new OrderedIncrementalFeatureRuntime(
@@ -108,9 +109,9 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                 Map.of(calculator.key(), seedFrom(warmup, calculator)));
 
         bots.put(plan.botId(), new RegisteredBot(
-                plan.botId(), interpreted, features, calculator, executionEligibleFrom));
-        log.info("bot {} registered for evaluation over {} instruments from {}",
-                plan.botId(), interpreted.subscribedInstruments().size(), executionEligibleFrom);
+                plan.botId(), interpreted, features, calculator, window));
+        log.info("bot {} registered for evaluation over {} instruments within {}",
+                plan.botId(), interpreted.subscribedInstruments().size(), window);
     }
 
     @Override
@@ -140,8 +141,11 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             if (!bot.plan().subscribedInstruments().contains(event.instrumentId())) {
                 continue;
             }
-            if (event.occurredAt().isBefore(bot.executionEligibleFrom())) {
-                // A room bot waits for its evaluation window; an earlier event is not its concern.
+            if (!bot.window().admits(event.occurredAt())) {
+                // A room bot waits for its evaluation window to open and stops deciding the moment it
+                // closes. Refusing here rather than relying on the stop arriving punctually is what
+                // keeps a trade decided after the room stopped counting out of the shared canonical
+                // ledger the room's performance is read from (C93).
                 continue;
             }
             evaluate(bot, event).ifPresent(results::add);
@@ -338,7 +342,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         private final BasicPlanInterpreter.InterpretedPlan plan;
         private final OrderedIncrementalFeatureRuntime features;
         private final BoundedWindowFeatureCalculator calculator;
-        private final Instant executionEligibleFrom;
+        private final EvaluationWindow window;
 
         /** The gateway's stream position, which starts wherever the bot joined. */
         private long lastMarketSequence = Long.MIN_VALUE;
@@ -351,12 +355,12 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                 BasicPlanInterpreter.InterpretedPlan plan,
                 OrderedIncrementalFeatureRuntime features,
                 BoundedWindowFeatureCalculator calculator,
-                Instant executionEligibleFrom) {
+                EvaluationWindow window) {
             this.botId = botId;
             this.plan = plan;
             this.features = features;
             this.calculator = calculator;
-            this.executionEligibleFrom = executionEligibleFrom;
+            this.window = window;
         }
 
         /** True when this event moves the bot forward, and records it when it does. */
@@ -392,8 +396,8 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             return calculator;
         }
 
-        private Instant executionEligibleFrom() {
-            return executionEligibleFrom;
+        private EvaluationWindow window() {
+            return window;
         }
     }
 

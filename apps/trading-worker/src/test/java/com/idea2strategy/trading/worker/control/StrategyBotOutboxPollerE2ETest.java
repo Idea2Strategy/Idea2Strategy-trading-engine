@@ -322,7 +322,7 @@ class StrategyBotOutboxPollerE2ETest {
         @Override
         public void start(LoadedExecutionPlan plan,
                 com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup warmup,
-                Instant executionEligibleFrom) {
+                com.idea2strategy.trading.strategy.runtime.control.EvaluationWindow window) {
             lifecycleEvents.add("start:" + plan.botId());
         }
 

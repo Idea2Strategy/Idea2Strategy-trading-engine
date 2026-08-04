@@ -59,8 +59,12 @@ public final class StrategyBotContractCodec {
         }
         String snapshotHash = requiredSha256(root, "expectedSnapshotHash");
         return switch (metadata.messageType()) {
+            // executionEligibleUntil is present only for a bot a schedule bounds, which today means a
+            // room participant. Absent means open-ended, not unbounded-by-accident: a personal bot's
+            // window is closed by its owner's stop, and there is no schedule to read one from.
             case RUN -> new StrategyBotRunCommand(
-                    metadata, botId, snapshotHash, requiredInstant(root, "executionEligibleFrom"));
+                    metadata, botId, snapshotHash, requiredInstant(root, "executionEligibleFrom"),
+                    optionalInstant(root, "executionEligibleUntil"));
             case STOP -> new StrategyBotStopCommand(
                     metadata, botId, snapshotHash, requiredText(root, "reasonCode"));
             default -> throw failure(BotControlFailure.INVALID_MESSAGE,
@@ -140,6 +144,18 @@ public final class StrategyBotContractCodec {
         } catch (IllegalArgumentException exception) {
             throw failure(BotControlFailure.INVALID_MESSAGE, name + " must be a UUID");
         }
+    }
+
+    /**
+     * An instant a command may omit. A present-but-unparseable value is still refused: silence means
+     * "no schedule bounds this bot", and a malformed end must not be read as the same thing.
+     */
+    private static Instant optionalInstant(JsonNode parent, String name) {
+        JsonNode value = parent == null ? null : parent.get(name);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        return requiredInstant(parent, name);
     }
 
     private static Instant requiredInstant(JsonNode parent, String name) {
