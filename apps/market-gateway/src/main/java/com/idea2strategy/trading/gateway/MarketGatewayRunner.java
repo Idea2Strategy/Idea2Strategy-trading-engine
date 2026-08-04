@@ -1,5 +1,6 @@
 package com.idea2strategy.trading.gateway;
 
+import com.idea2strategy.trading.common.runtime.FileReadinessMarker;
 import com.idea2strategy.trading.market.alpaca.AlpacaCredentialsProvider;
 import com.idea2strategy.trading.market.alpaca.AlpacaMarketEventNormalizer;
 import com.idea2strategy.trading.market.alpaca.AlpacaSipInboundMessage;
@@ -53,6 +54,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
     private final AlpacaMarketEventNormalizer normalizer;
     private final MarketEventOrderingProcessor orderingProcessor;
     private final RedisMarketEventPublisher publisher;
+    private final FileReadinessMarker readinessMarker;
     private final ReconnectBackoff backoff;
     private final Clock clock;
 
@@ -78,6 +80,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
             AlpacaMarketEventNormalizer normalizer,
             MarketEventOrderingProcessor orderingProcessor,
             RedisMarketEventPublisher publisher,
+            FileReadinessMarker readinessMarker,
             ReconnectBackoff backoff,
             Clock clock) {
         this.endpoint = Objects.requireNonNull(endpoint, "endpoint");
@@ -88,6 +91,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
         this.normalizer = Objects.requireNonNull(normalizer, "normalizer");
         this.orderingProcessor = Objects.requireNonNull(orderingProcessor, "orderingProcessor");
         this.publisher = Objects.requireNonNull(publisher, "publisher");
+        this.readinessMarker = Objects.requireNonNull(readinessMarker, "readinessMarker");
         this.backoff = Objects.requireNonNull(backoff, "backoff");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -104,6 +108,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
     @Override
     public void stop() {
         running = false;
+        readinessMarker.markNotReady();
         WebSocket socket = activeSocket.getAndSet(null);
         if (socket != null) {
             socket.abort();
@@ -146,6 +151,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
         log.error("Alpaca SIP rights are no longer verified; the gateway stays down until restarted "
                 + "with current rights evidence", failure);
         running = false;
+        readinessMarker.markNotReady();
         WebSocket socket = activeSocket.getAndSet(null);
         if (socket != null) {
             socket.abort();
@@ -209,10 +215,12 @@ public final class MarketGatewayRunner implements SmartLifecycle {
                 case AlpacaSipInboundMessage.SubscriptionConfirmed confirmed -> {
                     subscription.onSubscriptionApproved(confirmed.barSymbols());
                     failedAttempts.set(0);
+                    readinessMarker.markReady();
                     log.info("Alpaca SIP subscription active for {} symbols", confirmed.barSymbols().size());
                 }
                 case AlpacaSipInboundMessage.ProviderError error -> {
                     log.warn("Alpaca SIP error {}: {}", error.code(), error.message());
+                    readinessMarker.markNotReady();
                     publishUnavailable(MarketDataDegradationReason.PROVIDER_DISCONNECTED);
                 }
                 case AlpacaSipInboundMessage.MinuteBar bar -> publishBar(bar);
@@ -238,6 +246,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
         }
 
         private void handleDisconnect(String reason) {
+            readinessMarker.markNotReady();
             AlpacaSipSubscriptionManager manager = subscription;
             if (manager != null) {
                 manager.onDisconnected();

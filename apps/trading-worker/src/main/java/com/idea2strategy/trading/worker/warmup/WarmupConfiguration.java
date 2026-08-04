@@ -1,11 +1,13 @@
 package com.idea2strategy.trading.worker.warmup;
 
+import com.idea2strategy.trading.common.runtime.MaterializationReceipt;
 import com.idea2strategy.trading.market.warmup.FileWarmupBundleStore;
 import com.idea2strategy.trading.market.warmup.ManifestBoundWarmupDataSource;
 import com.idea2strategy.trading.market.warmup.WarmupBundleStore;
 import com.idea2strategy.trading.strategy.runtime.warmup.StartupWarmupCoordinator;
 import com.idea2strategy.trading.strategy.runtime.warmup.WarmupDataSource;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,7 +18,20 @@ import org.springframework.context.annotation.Configuration;
 @ConditionalOnProperty(prefix = "trading.warmup", name = "bundle-root")
 public class WarmupConfiguration {
     @Bean
-    WarmupBundleStore warmupBundleStore(@Value("${trading.warmup.bundle-root}") String bundleRoot) {
+    VerifiedWarmupMaterialization verifiedWarmupMaterialization(
+            @Value("${trading.warmup.bundle-root}") String bundleRoot,
+            @Value("${trading.warmup.manifest-key:manifest.json}") String manifestKey,
+            @Value("${trading.warmup.materialization-receipt-path}") String receiptPath) {
+        Path manifest = Path.of(bundleRoot).resolve(manifestKey).toAbsolutePath().normalize();
+        MaterializationReceipt.verify(
+                Path.of(receiptPath), Map.of("warmup-manifest", manifest));
+        return new VerifiedWarmupMaterialization();
+    }
+
+    @Bean
+    WarmupBundleStore warmupBundleStore(
+            @Value("${trading.warmup.bundle-root}") String bundleRoot,
+            VerifiedWarmupMaterialization verified) {
         return new FileWarmupBundleStore(Path.of(bundleRoot));
     }
 
@@ -37,4 +52,6 @@ public class WarmupConfiguration {
     BotStartupWarmupGate botStartupWarmupGate(StartupWarmupCoordinator coordinator) {
         return new BotStartupWarmupGate(coordinator);
     }
+
+    static final class VerifiedWarmupMaterialization {}
 }

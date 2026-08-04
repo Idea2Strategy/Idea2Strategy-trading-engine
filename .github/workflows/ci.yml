@@ -24,7 +24,11 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
-      - name: Run Gradle tests
+      - name: Run Gradle verification
         run: |
           chmod +x gradlew
-          ./gradlew test --no-daemon
+          ./gradlew check --no-daemon
+      - name: Smoke-test runtime containers
+        run: |
+          chmod +x scripts/test-container-runtime.sh
+          scripts/test-container-runtime.sh linux/amd64

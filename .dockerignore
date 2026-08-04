@@ -1,0 +1,9 @@
+.git
+.github
+.gradle
+.harness
+build
+**/build
+*.iml
+.idea
+

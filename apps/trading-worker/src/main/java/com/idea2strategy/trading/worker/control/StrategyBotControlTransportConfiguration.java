@@ -1,6 +1,7 @@
 package com.idea2strategy.trading.worker.control;
 
 import com.idea2strategy.trading.strategy.runtime.control.StrategyBotControlConsumer;
+import com.idea2strategy.trading.worker.lifecycle.RuntimeIntakeGate;
 import java.time.Clock;
 import java.time.Duration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -35,7 +36,10 @@ public class StrategyBotControlTransportConfiguration {
     @ConditionalOnBean(StrategyBotControlConsumer.class)
     @ConditionalOnProperty(name = "trading.bot-control.transport.enabled", matchIfMissing = true)
     StrategyBotOutboxPollingWorker strategyBotOutboxPollingWorker(
-            JdbcClient jdbc, StrategyBotControlConsumer consumer, Environment environment) {
+            JdbcClient jdbc,
+            StrategyBotControlConsumer consumer,
+            RuntimeIntakeGate intakeGate,
+            Environment environment) {
         return new StrategyBotOutboxPollingWorker(new StrategyBotOutboxPoller(
                 jdbc,
                 consumer,
@@ -45,20 +49,23 @@ public class StrategyBotControlTransportConfiguration {
                 environment.getProperty("trading.bot-control.batch-size", Integer.class, 32),
                 environment.getProperty("trading.bot-control.lease", Duration.class, Duration.ofSeconds(30)),
                 environment.getProperty("trading.bot-control.retry-backoff", Duration.class, Duration.ofSeconds(30)),
-                environment.getProperty("trading.bot-control.max-attempts", Integer.class, 5)));
+                environment.getProperty("trading.bot-control.max-attempts", Integer.class, 5)),
+                intakeGate);
     }
 
     /** The schedule around one {@link StrategyBotOutboxPoller#pollOnce()} cycle. */
     public static final class StrategyBotOutboxPollingWorker {
         private final StrategyBotOutboxPoller poller;
+        private final RuntimeIntakeGate intakeGate;
 
-        StrategyBotOutboxPollingWorker(StrategyBotOutboxPoller poller) {
+        StrategyBotOutboxPollingWorker(StrategyBotOutboxPoller poller, RuntimeIntakeGate intakeGate) {
             this.poller = poller;
+            this.intakeGate = intakeGate;
         }
 
         @Scheduled(fixedDelayString = "${trading.bot-control.poll-delay:PT1S}")
         public void poll() {
-            poller.pollOnce();
+            intakeGate.runIfOpen(poller::pollOnce);
         }
     }
 }

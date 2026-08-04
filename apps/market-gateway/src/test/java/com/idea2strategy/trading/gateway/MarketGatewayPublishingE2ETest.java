@@ -1,6 +1,7 @@
 package com.idea2strategy.trading.gateway;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -15,10 +16,13 @@ import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.HexFormat;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -54,12 +58,15 @@ class MarketGatewayPublishingE2ETest {
     @Test
     void publishesRealAlpacaBarsToRedisAndSurvivesADroppedConnection() throws Exception {
         FakeAlpacaSipServer server = new FakeAlpacaSipServer(1);
+        Path mapping = mapping();
+        Path readinessFile = readinessFile(mapping);
         server.startAndAwait();
         try {
-            try (ConfigurableApplicationContext context = gateway(server.port(), validRights(), mapping())) {
+            try (ConfigurableApplicationContext context = gateway(server.port(), validRights(), mapping)) {
                 RedisMarketEventPublisher publisher = context.getBean(RedisMarketEventPublisher.class);
 
                 waitUntil(() -> publisher.streamLength() >= 1, Duration.ofSeconds(30));
+                waitUntil(() -> Files.isRegularFile(readinessFile), Duration.ofSeconds(10));
                 Thread.sleep(500);
 
                 assertEquals(1, publisher.streamLength());
@@ -89,6 +96,7 @@ class MarketGatewayPublishingE2ETest {
                 assertTrue(server.received.stream().anyMatch(frame ->
                         frame.contains("\"action\":\"subscribe\"") && frame.contains("\"bars\":[\"AAPL\"]")));
             }
+            assertFalse(Files.exists(readinessFile));
         } finally {
             server.stop();
         }
@@ -104,10 +112,14 @@ class MarketGatewayPublishingE2ETest {
 
     @Test
     void missingInstrumentMappingBlocksStartup() throws IOException {
+        Path mapping = mapping();
+        Path rights = validRights();
+        Path receipt = receipt(rights, mapping);
+        Files.delete(mapping);
         Exception failure = assertThrows(
                 Exception.class,
-                () -> gateway(9, validRights(), configDir.resolve("missing-mapping.json")).close());
-        assertTrue(hasCauseMessage(failure, "instrument mapping file is missing"));
+                () -> gateway(9, rights, mapping, receipt).close());
+        assertTrue(hasCauseMessage(failure, "materialized artifact instrument-mapping"));
     }
 
     @Test
@@ -122,8 +134,12 @@ class MarketGatewayPublishingE2ETest {
         assertTrue(hasCauseMessage(failure, "ALPACA_API_KEY"));
     }
 
-    private ConfigurableApplicationContext gateway(int port, Path rights, Path mapping) {
-        String[] properties = baseProperties(port, rights, mapping);
+    private ConfigurableApplicationContext gateway(int port, Path rights, Path mapping) throws IOException {
+        return gateway(port, rights, mapping, receipt(rights, mapping));
+    }
+
+    private ConfigurableApplicationContext gateway(int port, Path rights, Path mapping, Path receipt) {
+        String[] properties = baseProperties(port, rights, mapping, receipt);
         String[] withCredentials = new String[properties.length + 2];
         System.arraycopy(properties, 0, withCredentials, 0, properties.length);
         withCredentials[properties.length] = "ALPACA_API_KEY=test-key";
@@ -133,16 +149,60 @@ class MarketGatewayPublishingE2ETest {
                 .run();
     }
 
-    private static String[] baseProperties(int port, Path rights, Path mapping) {
+    private String[] baseProperties(int port, Path rights, Path mapping) throws IOException {
+        return baseProperties(port, rights, mapping, receipt(rights, mapping));
+    }
+
+    private static String[] baseProperties(int port, Path rights, Path mapping, Path receipt) {
         return new String[] {
             "market-gateway.redis-uri=redis://" + REDIS.getHost() + ":" + REDIS.getMappedPort(6379),
             "market-gateway.redis-key-prefix=test:" + UUID.randomUUID(),
             "market-gateway.instrument-mapping-path=" + mapping,
             "market-gateway.rights-evidence-path=" + rights,
+            "market-gateway.materialization-receipt-path=" + receipt,
+            "i2s.readiness-file=" + readinessFile(mapping),
             "market-gateway.alpaca-endpoint=ws://127.0.0.1:" + port,
             "market-gateway.reconnect-initial-delay=PT0.2S",
             "market-gateway.reconnect-max-delay=PT1S",
         };
+    }
+
+    private Path receipt(Path rights, Path mapping) throws IOException {
+        return Files.writeString(configDir.resolve("materialization-" + UUID.randomUUID() + ".properties"), """
+                contract=i2s.materialization-receipt
+                schema-version=1
+                artifact-count=2
+                artifact.0.id=instrument-mapping
+                artifact.0.source-bucket=runtime-bucket
+                artifact.0.source-key=trading/instruments.json
+                artifact.0.source-version-id=mapping-v1
+                artifact.0.sha256=%s
+                artifact.0.local-path=%s
+                artifact.1.id=provider-rights
+                artifact.1.source-bucket=runtime-bucket
+                artifact.1.source-key=trading/alpaca-sip-rights.json
+                artifact.1.source-version-id=rights-v1
+                artifact.1.sha256=%s
+                artifact.1.local-path=%s
+                """.formatted(
+                        sha256(mapping), portable(mapping), sha256(rights), portable(rights)));
+    }
+
+    private static String portable(Path path) {
+        return path.toAbsolutePath().normalize().toString().replace('\\', '/');
+    }
+
+    private static String sha256(Path path) throws IOException {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(Files.readAllBytes(path)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
+
+    private static Path readinessFile(Path mapping) {
+        return mapping.resolveSibling(mapping.getFileName() + ".ready");
     }
 
     private Path validRights() throws IOException {

@@ -25,6 +25,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers(disabledWithoutDocker = true)
 @SpringBootTest(properties = {
         "trading.fake-candidate.enabled=true",
+        "trading.runtime.lifecycle.enabled=false",
         "spring.flyway.enabled=true"
 })
 class VirtualFillWorkerIntegrationTest {
