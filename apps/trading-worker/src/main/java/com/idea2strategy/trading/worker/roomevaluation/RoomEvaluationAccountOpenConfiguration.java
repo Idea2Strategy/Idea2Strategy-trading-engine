@@ -21,7 +21,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 public class RoomEvaluationAccountOpenConfiguration {
 
     @Bean
-    @ConditionalOnProperty(name = "trading.room-account-open.enabled", matchIfMissing = true)
+    @ConditionalOnProperty(name = "trading.room-account-open.enabled", havingValue = "true")
     PollingWorker roomEvaluationAccountOpenWorker(
             JdbcClient jdbc, BotEventStore events, LedgerStore ledger,
             PlatformTransactionManager transactionManager, RuntimeIntakeGate intakeGate,
