@@ -41,11 +41,11 @@ import org.slf4j.LoggerFactory;
  * corrected entry, and the runtime's per-bot sequence guard is what decides on those. Re-running C06
  * here would need the gateway's per-stream state, which this process does not have and must not guess.
  *
- * <p><strong>C09, partially.</strong> The degradation rule this consumer can own is its own lag: when
- * the group falls further behind than the configured maximum, feeding stops, because a bot deciding on
- * a bar that is minutes old is deciding on a market that no longer exists. The other degradation inputs
+ * <p><strong>C09.</strong> The consumer owns its group lag and reads the gateway's instrument-keyed
+ * availability projection. Missing, stale or malformed authority is a denial, and a denied entry stays
+ * pending so it can be retried after recovery. The remaining gateway-owned inputs
  * — provider connectivity and session state — are the gateway's knowledge and are keyed by symbol,
- * which this process cannot resolve from an instrument id today. That half stays with the gateway.
+ * and remain there deliberately, so this process never invents an instrument-to-symbol mapping.
  */
 public final class RedisMarketEventStreamConsumer {
 
@@ -61,6 +61,7 @@ public final class RedisMarketEventStreamConsumer {
     private final int batchSize;
     private final Duration reclaimAfter;
     private final long maximumEntryLag;
+    private final MarketEventAvailabilityPolicy availabilityPolicy;
 
     private boolean groupReady;
 
@@ -72,6 +73,18 @@ public final class RedisMarketEventStreamConsumer {
             int batchSize,
             Duration reclaimAfter,
             long maximumEntryLag) {
+        this(commands, runtime, streamKey, consumerName, batchSize, reclaimAfter, maximumEntryLag, event -> true);
+    }
+
+    public RedisMarketEventStreamConsumer(
+            RedisCommands<String, String> commands,
+            EvaluatingBotRuntime runtime,
+            String streamKey,
+            String consumerName,
+            int batchSize,
+            Duration reclaimAfter,
+            long maximumEntryLag,
+            MarketEventAvailabilityPolicy availabilityPolicy) {
         this.commands = Objects.requireNonNull(commands, "commands");
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.streamKey = requireText(streamKey, "streamKey");
@@ -82,6 +95,7 @@ public final class RedisMarketEventStreamConsumer {
             throw new IllegalArgumentException("maximumEntryLag must not be negative");
         }
         this.maximumEntryLag = maximumEntryLag;
+        this.availabilityPolicy = Objects.requireNonNull(availabilityPolicy, "availabilityPolicy");
     }
 
     /**
@@ -155,6 +169,14 @@ public final class RedisMarketEventStreamConsumer {
             }
             try {
                 MarketEventEnvelope event = MarketEventStreamEntry.decode(message.getBody());
+                if (!availabilityPolicy.permits(event)) {
+                    // The projection may be racing the event publication or may recover later. Leave
+                    // the entry pending so reclaim retries it; acknowledging would permanently lose
+                    // the evaluation that C09 temporarily prohibited.
+                    log.warn("market event {} is blocked by the gateway availability projection; left pending",
+                            event.eventId());
+                    continue;
+                }
                 runtime.feed(event);
                 commands.xack(streamKey, CONSUMER_GROUP, message.getId());
                 fed++;

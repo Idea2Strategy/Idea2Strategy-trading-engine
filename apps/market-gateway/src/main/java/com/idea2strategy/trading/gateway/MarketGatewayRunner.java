@@ -8,11 +8,15 @@ import com.idea2strategy.trading.market.alpaca.AlpacaSipSubscriptionManager;
 import com.idea2strategy.trading.market.alpaca.AlpacaSipWebSocketTransport;
 import com.idea2strategy.trading.market.alpaca.ApprovedSymbolUniverse;
 import com.idea2strategy.trading.market.alpaca.MarketEventHandlingResult;
+import com.idea2strategy.trading.market.alpaca.MarketEventHandlingStatus;
 import com.idea2strategy.trading.market.alpaca.MarketEventOrderingProcessor;
 import com.idea2strategy.trading.market.alpaca.ProviderRightsGate;
 import com.idea2strategy.trading.market.alpaca.ProviderRightsUnavailableException;
 import com.idea2strategy.trading.market.alpaca.ReconnectBackoff;
 import com.idea2strategy.trading.market.alpaca.UnsupportedInstrumentException;
+import com.idea2strategy.trading.market.availability.MarketDataAvailabilityResult;
+import com.idea2strategy.trading.market.availability.MarketDataAvailabilityStatus;
+import com.idea2strategy.trading.market.availability.MarketDataDegradationReason;
 import com.idea2strategy.trading.market.redis.MarketEventPublishResult;
 import com.idea2strategy.trading.market.redis.RedisMarketEventPublisher;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
@@ -21,8 +25,11 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -58,6 +65,8 @@ public final class MarketGatewayRunner implements SmartLifecycle {
     private final AtomicInteger failedAttempts = new AtomicInteger();
     private final AtomicReference<WebSocket> activeSocket = new AtomicReference<>();
     private final Map<String, LongAdder> unpublishedFrames = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> latestSequenceByInstrument = new ConcurrentHashMap<>();
+    private final Set<UUID> instrumentsWithSequenceGap = ConcurrentHashMap.newKeySet();
     private volatile boolean running;
 
     public MarketGatewayRunner(
@@ -202,8 +211,10 @@ public final class MarketGatewayRunner implements SmartLifecycle {
                     failedAttempts.set(0);
                     log.info("Alpaca SIP subscription active for {} symbols", confirmed.barSymbols().size());
                 }
-                case AlpacaSipInboundMessage.ProviderError error ->
-                        log.warn("Alpaca SIP error {}: {}", error.code(), error.message());
+                case AlpacaSipInboundMessage.ProviderError error -> {
+                    log.warn("Alpaca SIP error {}: {}", error.code(), error.message());
+                    publishUnavailable(MarketDataDegradationReason.PROVIDER_DISCONNECTED);
+                }
                 case AlpacaSipInboundMessage.MinuteBar bar -> publishBar(bar);
                 case AlpacaSipInboundMessage.UnsupportedFrame unsupported ->
                         unpublishedFrames.computeIfAbsent(unsupported.frameType(), key -> new LongAdder())
@@ -221,6 +232,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
             }
             MarketEventHandlingResult handling = orderingProcessor.process(envelope);
             MarketEventPublishResult result = publisher.publish(handling);
+            publishAvailability(envelope, handling);
             log.debug("bar {} {} handling={} publish={}",
                     envelope.instrumentId(), envelope.occurredAt(), handling.status(), result.status());
         }
@@ -231,6 +243,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
                 manager.onDisconnected();
             }
             activeSocket.set(null);
+            publishUnavailable(MarketDataDegradationReason.PROVIDER_DISCONNECTED);
             if (!unpublishedFrames.isEmpty()) {
                 log.info("Alpaca SIP frames received without a publishing path this connection: {}",
                         unpublishedFrames);
@@ -239,5 +252,54 @@ public final class MarketGatewayRunner implements SmartLifecycle {
             log.info("Alpaca SIP connection {}", reason);
             scheduleReconnect();
         }
+    }
+
+    private void publishAvailability(MarketEventEnvelope event, MarketEventHandlingResult handling) {
+        if (handling.status() == MarketEventHandlingStatus.DUPLICATE
+                || handling.status() == MarketEventHandlingStatus.STALE_CORRECTION) {
+            return;
+        }
+
+        Long previous = latestSequenceByInstrument.putIfAbsent(event.instrumentId(), event.sequence());
+        if (previous != null && event.sequence() > previous) {
+            latestSequenceByInstrument.put(event.instrumentId(), event.sequence());
+            if (event.sequence() > previous + 1) {
+                instrumentsWithSequenceGap.add(event.instrumentId());
+            }
+        }
+
+        Set<MarketDataDegradationReason> reasons = new HashSet<>();
+        if (instrumentsWithSequenceGap.contains(event.instrumentId())) {
+            reasons.add(MarketDataDegradationReason.SEQUENCE_GAP);
+        }
+        switch (handling.status()) {
+            case OUT_OF_ORDER, SEQUENCE_CONFLICT, ORPHAN_CORRECTION ->
+                    reasons.add(MarketDataDegradationReason.SEQUENCE_GAP);
+            default -> { }
+        }
+        MarketDataAvailabilityResult availability = reasons.isEmpty()
+                ? available()
+                : degraded(reasons);
+        publisher.publishAvailability(
+                event.instrumentId(),
+                Math.max(event.sequence(), latestSequenceByInstrument.get(event.instrumentId())),
+                clock.instant(),
+                availability);
+    }
+
+    private void publishUnavailable(MarketDataDegradationReason reason) {
+        MarketDataAvailabilityResult availability = degraded(Set.of(reason));
+        latestSequenceByInstrument.forEach((instrumentId, sequence) ->
+                publisher.publishAvailability(instrumentId, sequence, clock.instant(), availability));
+    }
+
+    private static MarketDataAvailabilityResult available() {
+        return new MarketDataAvailabilityResult(
+                MarketDataAvailabilityStatus.AVAILABLE, true, true, Set.of(), java.util.List.of());
+    }
+
+    private static MarketDataAvailabilityResult degraded(Set<MarketDataDegradationReason> reasons) {
+        return new MarketDataAvailabilityResult(
+                MarketDataAvailabilityStatus.DEGRADED, false, false, reasons, java.util.List.of());
     }
 }

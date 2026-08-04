@@ -5,6 +5,7 @@ import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
+import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -47,6 +48,14 @@ public class MarketEventTransportConfiguration {
             EvaluatingBotRuntime runtime,
             Environment environment) {
         String prefix = environment.getProperty("trading.market-events.redis-key-prefix", "i2s");
+        var availabilityPolicy = new RedisProjectedMarketAvailabilityPolicy(
+                connection.sync(),
+                prefix,
+                Clock.systemUTC(),
+                environment.getProperty(
+                        "trading.market-events.maximum-availability-age",
+                        Duration.class,
+                        Duration.ofMinutes(2)));
         return new RedisMarketEventStreamConsumer(
                 connection.sync(),
                 runtime,
@@ -57,7 +66,8 @@ public class MarketEventTransportConfiguration {
                 environment.getProperty("trading.market-events.batch-size", Integer.class, 128),
                 environment.getProperty(
                         "trading.market-events.reclaim-after", Duration.class, Duration.ofSeconds(60)),
-                environment.getProperty("trading.market-events.maximum-entry-lag", Long.class, 600L));
+                environment.getProperty("trading.market-events.maximum-entry-lag", Long.class, 600L),
+                availabilityPolicy);
     }
 
     @Bean
