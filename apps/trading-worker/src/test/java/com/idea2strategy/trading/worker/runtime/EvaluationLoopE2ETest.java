@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.idea2strategy.trading.application.candidate.CandidateBatchProcessingResult;
+import com.idea2strategy.trading.application.candidate.CandidateBatchProcessor;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
 import com.idea2strategy.trading.messaging.market.MarketEventType;
 import com.idea2strategy.trading.persistence.canonical.CanonicalBaseline;
@@ -14,6 +15,7 @@ import com.idea2strategy.trading.strategy.runtime.plan.LoadedExecutionPlan;
 import com.idea2strategy.trading.strategy.runtime.warmup.FeatureObservation;
 import com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup;
 import com.idea2strategy.trading.strategy.runtime.warmup.WarmupFeatureSeries;
+import com.idea2strategy.trading.worker.candidate.OrderCandidateBatchAdapter;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -87,6 +89,18 @@ class EvaluationLoopE2ETest {
 
     @Autowired
     private JdbcClient jdbc;
+
+    @Autowired
+    private CandidateBatchProcessor processor;
+
+    @Autowired
+    private OrderCandidateBatchAdapter adapter;
+
+    @Autowired
+    private EvaluatingBotRuntime.BotScopeResolver scopeResolver;
+
+    @Autowired
+    private EvaluatingBotRuntime.EvaluationRunRecorder runRecorder;
 
     /**
      * Each case starts from an unregistered bot and an empty canonical record.
@@ -166,6 +180,64 @@ class EvaluationLoopE2ETest {
                 () -> assertEquals(1, count(
                         "select count(*) from trading.resource_reservations where bot_id = ?", BOT)),
                 () -> assertEquals(1, count("select count(*) from bot.evaluation_runs where bot_id = ?", BOT)));
+    }
+
+    /**
+     * A process restart loses the in-memory market sequence, but it must not lose the event's durable
+     * identity. The replacement runtime deliberately starts with fresh feature and sequence state,
+     * then receives the exact event the first process already committed. Evaluation, candidate-batch,
+     * intent and reservation identities must converge on the existing canonical rows.
+     */
+    @Test
+    void aMarketEventRedeliveredAfterProcessRestartHasOneCanonicalEffect() {
+        MarketEventEnvelope deliveredBeforeRestart = event(21, "84");
+        EvaluatingBotRuntime firstProcess = freshRuntime();
+        firstProcess.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
+
+        List<CandidateBatchProcessingResult> first = firstProcess.feed(deliveredBeforeRestart);
+        String evaluationId = text(
+                "select id::text from bot.evaluation_runs where bot_id = ?", BOT);
+        String batchId = text(
+                "select id::text from trading.order_intent_batches where bot_id = ?", BOT);
+        String reservationId = text(
+                "select id::text from trading.resource_reservations where bot_id = ?", BOT);
+        String reservedAmount = text(
+                "select reserved_amount::text from trading.resource_reservations where bot_id = ?", BOT);
+        long ledgerTransactions = count(
+                "select count(*) from trading.ledger_transactions where bot_id = ?", BOT);
+
+        EvaluatingBotRuntime replacementProcess = freshRuntime();
+        replacementProcess.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
+        List<CandidateBatchProcessingResult> redelivered =
+                replacementProcess.feed(deliveredBeforeRestart);
+
+        assertAll(
+                () -> assertEquals(List.of(CandidateBatchProcessingResult.PROCESSED), first),
+                () -> assertEquals(List.of(CandidateBatchProcessingResult.DUPLICATE), redelivered),
+                () -> assertEquals(1, count(
+                        "select count(*) from bot.evaluation_runs where bot_id = ?", BOT)),
+                () -> assertEquals(evaluationId, text(
+                        "select id::text from bot.evaluation_runs where bot_id = ?", BOT)),
+                () -> assertEquals(1, count(
+                        "select count(*) from bot.bot_events where bot_id = ? "
+                                + "and event_type = 'EVALUATION_COMPLETED'", BOT)),
+                () -> assertEquals(1, count(
+                        "select count(*) from trading.order_intent_batches where bot_id = ?", BOT)),
+                () -> assertEquals(batchId, text(
+                        "select id::text from trading.order_intent_batches where bot_id = ?", BOT)),
+                () -> assertEquals(1, count(
+                        "select count(*) from trading.order_intents where bot_id = ?", BOT)),
+                () -> assertEquals(1, count(
+                        "select count(*) from trading.orders where bot_id = ?", BOT)),
+                () -> assertEquals(1, count(
+                        "select count(*) from trading.resource_reservations where bot_id = ?", BOT)),
+                () -> assertEquals(reservationId, text(
+                        "select id::text from trading.resource_reservations where bot_id = ?", BOT)),
+                () -> assertEquals(reservedAmount, text(
+                        "select reserved_amount::text from trading.resource_reservations where bot_id = ?", BOT)),
+                () -> assertEquals(ledgerTransactions, count(
+                        "select count(*) from trading.ledger_transactions where bot_id = ?", BOT),
+                        "redelivery after restart must not mutate the official ledger"));
     }
 
     /** An event before the bot's eligibility instant is not its concern: a room bot waits. */
@@ -264,6 +336,10 @@ class EvaluationLoopE2ETest {
         return new LoadedExecutionPlan(
                 BOT, RELEASE, "basic-compiled-plan.v1", Set.of(), planDocument(),
                 "strategy-bot-runtime.v1", 0, Map.of());
+    }
+
+    private EvaluatingBotRuntime freshRuntime() {
+        return new EvaluatingBotRuntime(processor, adapter, scopeResolver, runRecorder);
     }
 
     /**
