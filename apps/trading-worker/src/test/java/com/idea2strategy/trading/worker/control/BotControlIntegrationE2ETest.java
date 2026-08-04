@@ -119,7 +119,9 @@ class BotControlIntegrationE2ETest {
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("trading.warmup.bundle-root", WARMUP_ROOT::toString);
-        registry.add("trading.warmup.materialization-receipt-path", () -> WARMUP_ROOT.resolve("receipt.properties"));
+        registry.add(
+                "trading.warmup.materialization-receipt-path",
+                () -> WARMUP_ROOT.resolve("receipt.properties").toString());
     }
 
     private static Path prepareWarmupMaterialization() {
