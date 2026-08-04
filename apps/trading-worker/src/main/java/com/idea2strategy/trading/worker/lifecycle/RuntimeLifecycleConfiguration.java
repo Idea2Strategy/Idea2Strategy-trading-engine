@@ -1,6 +1,8 @@
 package com.idea2strategy.trading.worker.lifecycle;
 
+import com.idea2strategy.trading.common.runtime.FileReadinessMarker;
 import com.idea2strategy.trading.application.stop.BotStopOrchestrator;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import org.springframework.beans.factory.ObjectProvider;
@@ -21,12 +23,20 @@ public class RuntimeLifecycleConfiguration {
     }
 
     @Bean
+    FileReadinessMarker tradingWorkerReadinessMarker(Environment environment) {
+        return new FileReadinessMarker(Path.of(environment.getProperty(
+                "i2s.readiness-file", "/tmp/idea2strategy-ready")));
+    }
+
+    @Bean
     RuntimeLifecycleCoordinator runtimeLifecycleCoordinator(
             RuntimeIntakeGate gate,
+            FileReadinessMarker readinessMarker,
             ObjectProvider<BotStopOrchestrator> orchestrator,
             Environment environment) {
         return new RuntimeLifecycleCoordinator(
                 gate,
+                readinessMarker,
                 now -> {
                     BotStopOrchestrator available = orchestrator.getIfAvailable();
                     if (available != null) {

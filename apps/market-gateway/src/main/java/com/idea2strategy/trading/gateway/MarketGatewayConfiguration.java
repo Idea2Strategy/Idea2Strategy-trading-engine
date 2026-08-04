@@ -1,5 +1,6 @@
 package com.idea2strategy.trading.gateway;
 
+import com.idea2strategy.trading.common.runtime.FileReadinessMarker;
 import com.idea2strategy.trading.market.alpaca.AlpacaCredentialsProvider;
 import com.idea2strategy.trading.market.alpaca.AlpacaMarketEventNormalizer;
 import com.idea2strategy.trading.market.alpaca.AlpacaSipMessageParser;
@@ -51,6 +52,12 @@ public class MarketGatewayConfiguration {
     }
 
     @Bean
+    FileReadinessMarker marketGatewayReadinessMarker(
+            @Value("${i2s.readiness-file:/tmp/idea2strategy-ready}") String readinessFile) {
+        return new FileReadinessMarker(Path.of(readinessFile));
+    }
+
+    @Bean
     ProviderRightsGate providerRightsGate(
             @Value("${market-gateway.rights-evidence-path}") String evidencePath,
             Clock marketGatewayClock) {
@@ -73,6 +80,7 @@ public class MarketGatewayConfiguration {
             AlpacaCredentialsProvider credentialsProvider,
             AlpacaMarketEventNormalizer normalizer,
             RedisMarketEventPublisher publisher,
+            FileReadinessMarker readinessMarker,
             Clock marketGatewayClock) {
         return new MarketGatewayRunner(
                 endpoint,
@@ -83,6 +91,7 @@ public class MarketGatewayConfiguration {
                 normalizer,
                 new MarketEventOrderingProcessor(),
                 publisher,
+                readinessMarker,
                 new ReconnectBackoff(reconnectInitialDelay, reconnectMaxDelay),
                 marketGatewayClock);
     }

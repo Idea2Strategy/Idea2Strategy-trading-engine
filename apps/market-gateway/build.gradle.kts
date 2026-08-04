@@ -5,6 +5,7 @@ plugins {
 
 dependencies {
     implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
+    implementation(project(":modules:trading-common"))
     implementation(project(":modules:market-data-adapter"))
     implementation(project(":modules:trading-messaging"))
     implementation("org.springframework.boot:spring-boot-starter-actuator")

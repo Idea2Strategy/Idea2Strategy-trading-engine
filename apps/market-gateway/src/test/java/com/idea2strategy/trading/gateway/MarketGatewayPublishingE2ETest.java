@@ -1,6 +1,7 @@
 package com.idea2strategy.trading.gateway;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -54,12 +55,15 @@ class MarketGatewayPublishingE2ETest {
     @Test
     void publishesRealAlpacaBarsToRedisAndSurvivesADroppedConnection() throws Exception {
         FakeAlpacaSipServer server = new FakeAlpacaSipServer(1);
+        Path mapping = mapping();
+        Path readinessFile = readinessFile(mapping);
         server.startAndAwait();
         try {
-            try (ConfigurableApplicationContext context = gateway(server.port(), validRights(), mapping())) {
+            try (ConfigurableApplicationContext context = gateway(server.port(), validRights(), mapping)) {
                 RedisMarketEventPublisher publisher = context.getBean(RedisMarketEventPublisher.class);
 
                 waitUntil(() -> publisher.streamLength() >= 1, Duration.ofSeconds(30));
+                waitUntil(() -> Files.isRegularFile(readinessFile), Duration.ofSeconds(10));
                 Thread.sleep(500);
 
                 assertEquals(1, publisher.streamLength());
@@ -89,6 +93,7 @@ class MarketGatewayPublishingE2ETest {
                 assertTrue(server.received.stream().anyMatch(frame ->
                         frame.contains("\"action\":\"subscribe\"") && frame.contains("\"bars\":[\"AAPL\"]")));
             }
+            assertFalse(Files.exists(readinessFile));
         } finally {
             server.stop();
         }
@@ -139,10 +144,15 @@ class MarketGatewayPublishingE2ETest {
             "market-gateway.redis-key-prefix=test:" + UUID.randomUUID(),
             "market-gateway.instrument-mapping-path=" + mapping,
             "market-gateway.rights-evidence-path=" + rights,
+            "i2s.readiness-file=" + readinessFile(mapping),
             "market-gateway.alpaca-endpoint=ws://127.0.0.1:" + port,
             "market-gateway.reconnect-initial-delay=PT0.2S",
             "market-gateway.reconnect-max-delay=PT1S",
         };
+    }
+
+    private static Path readinessFile(Path mapping) {
+        return mapping.resolveSibling(mapping.getFileName() + ".ready");
     }
 
     private Path validRights() throws IOException {

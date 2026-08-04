@@ -28,3 +28,7 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew check --no-daemon
+      - name: Smoke-test runtime containers
+        run: |
+          chmod +x scripts/test-container-runtime.sh
+          scripts/test-container-runtime.sh linux/amd64
