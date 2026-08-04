@@ -16,6 +16,7 @@ spring:
 #   redis-key-prefix: i2s
 #   instrument-mapping-path: /etc/market-gateway/instruments.json
 #   rights-evidence-path: /etc/market-gateway/alpaca-sip-rights.json
+#   materialization-receipt-path: /etc/market-gateway/materialization.properties
 #   alpaca-endpoint: wss://stream.data.alpaca.markets/v2/sip
 #   reconnect-initial-delay: PT1S
 #   reconnect-max-delay: PT1M

@@ -1,6 +1,7 @@
 package com.idea2strategy.trading.gateway;
 
 import com.idea2strategy.trading.common.runtime.FileReadinessMarker;
+import com.idea2strategy.trading.common.runtime.MaterializationReceipt;
 import com.idea2strategy.trading.market.alpaca.AlpacaCredentialsProvider;
 import com.idea2strategy.trading.market.alpaca.AlpacaMarketEventNormalizer;
 import com.idea2strategy.trading.market.alpaca.AlpacaSipMessageParser;
@@ -14,6 +15,7 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -23,6 +25,19 @@ import org.springframework.core.env.Environment;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "market-gateway", name = "redis-uri")
 public class MarketGatewayConfiguration {
+    @Bean
+    VerifiedGatewayMaterialization verifiedGatewayMaterialization(
+            @Value("${market-gateway.instrument-mapping-path}") String mappingPath,
+            @Value("${market-gateway.rights-evidence-path}") String evidencePath,
+            @Value("${market-gateway.materialization-receipt-path}") String receiptPath) {
+        MaterializationReceipt.verify(
+                Path.of(receiptPath),
+                Map.of(
+                        "instrument-mapping", Path.of(mappingPath),
+                        "provider-rights", Path.of(evidencePath)));
+        return new VerifiedGatewayMaterialization();
+    }
+
     @Bean(destroyMethod = "close")
     RedisMarketEventPublisher marketEventPublisher(
             @Value("${market-gateway.redis-uri}") String redisUri,
@@ -32,7 +47,8 @@ public class MarketGatewayConfiguration {
 
     @Bean
     ApprovedInstruments approvedInstruments(
-            @Value("${market-gateway.instrument-mapping-path}") String mappingPath) {
+            @Value("${market-gateway.instrument-mapping-path}") String mappingPath,
+            VerifiedGatewayMaterialization verified) {
         return new ApprovedInstruments(FileInstrumentMapping.load(Path.of(mappingPath)));
     }
 
@@ -60,7 +76,8 @@ public class MarketGatewayConfiguration {
     @Bean
     ProviderRightsGate providerRightsGate(
             @Value("${market-gateway.rights-evidence-path}") String evidencePath,
-            Clock marketGatewayClock) {
+            Clock marketGatewayClock,
+            VerifiedGatewayMaterialization verified) {
         return new ProviderRightsGate(
                 new FileProviderRightsEvidenceSource(Path.of(evidencePath)), marketGatewayClock);
     }
@@ -95,4 +112,6 @@ public class MarketGatewayConfiguration {
                 new ReconnectBackoff(reconnectInitialDelay, reconnectMaxDelay),
                 marketGatewayClock);
     }
+
+    static final class VerifiedGatewayMaterialization {}
 }

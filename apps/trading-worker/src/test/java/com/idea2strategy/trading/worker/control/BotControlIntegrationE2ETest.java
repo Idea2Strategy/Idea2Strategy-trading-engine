@@ -15,6 +15,9 @@ import com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup;
 import com.idea2strategy.trading.strategy.runtime.warmup.WarmupFeatureSeries;
 import com.idea2strategy.trading.worker.runtime.EvaluatingBotRuntime;
 import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -24,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.HexFormat;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -68,12 +72,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         "spring.flyway.enabled=true",
         "spring.flyway.table=flyway_schema_history_private",
         "spring.flyway.baseline-on-migrate=true",
-        // Declares that this worker has a warm-up source, which is what lets bot control wire at all.
-        "trading.warmup.bundle-root=build/tmp/b91-warmup",
         // The scheduled cycle would race the poller each case drives on its own clock.
         "trading.bot-control.transport.enabled=false"
 })
 class BotControlIntegrationE2ETest {
+    private static final Path WARMUP_ROOT = prepareWarmupMaterialization();
 
     private static final UUID BOT = UUID.fromString("b9100000-0000-4000-8000-000000000001");
     private static final UUID PARTITION = UUID.fromString("b9100000-0000-4000-8000-000000000003");
@@ -115,6 +118,32 @@ class BotControlIntegrationE2ETest {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("trading.warmup.bundle-root", WARMUP_ROOT::toString);
+        registry.add("trading.warmup.materialization-receipt-path", () -> WARMUP_ROOT.resolve("receipt.properties"));
+    }
+
+    private static Path prepareWarmupMaterialization() {
+        try {
+            Path root = Path.of("build/tmp/b91-warmup").toAbsolutePath().normalize();
+            Files.createDirectories(root);
+            Path manifest = Files.writeString(root.resolve("manifest.json"), "{}");
+            String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(Files.readAllBytes(manifest)));
+            Files.writeString(root.resolve("receipt.properties"), """
+                    contract=i2s.materialization-receipt
+                    schema-version=1
+                    artifact-count=1
+                    artifact.0.id=warmup-manifest
+                    artifact.0.source-bucket=runtime-bucket
+                    artifact.0.source-key=trading/warmup/manifest.json
+                    artifact.0.source-version-id=b91-v1
+                    artifact.0.sha256=%s
+                    artifact.0.local-path=%s
+                    """.formatted(hash, manifest.toString().replace('\\', '/')));
+            return root;
+        } catch (Exception exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
     }
 
     /** Hands over a prepared window in place of D's bundle; see the class comment. */

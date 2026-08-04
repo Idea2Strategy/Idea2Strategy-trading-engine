@@ -25,3 +25,10 @@ trading:
 #     redis-uri: redis://redis:6379
 #     redis-key-prefix: i2s
 #     maximum-availability-age: PT2M
+
+# A configured warm-up bundle is accepted only with a versioned S3 materialization receipt.
+# trading:
+#   warmup:
+#     bundle-root: /run/idea2strategy/trading-worker/warmup
+#     manifest-key: manifest.json
+#     materialization-receipt-path: /run/idea2strategy/trading-worker/materialization.properties
