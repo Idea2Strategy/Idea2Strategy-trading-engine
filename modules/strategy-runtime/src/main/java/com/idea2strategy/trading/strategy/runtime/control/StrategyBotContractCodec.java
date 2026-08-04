@@ -228,9 +228,53 @@ public final class StrategyBotContractCodec {
                     }
                     material.append(instrument.textValue());
                 }
+                // A version 2 plan carries its steps per container, so they are checksummed where they
+                // live. Appended after the flow's own line rather than in a separate pass, so the
+                // material reads in the order a reader would follow the document.
+                if (flow.has("steps")) {
+                    appendSteps(material, requiredArray(flow, "steps"));
+                }
             });
         });
-        JsonNode steps = requiredArray(root, "steps");
+        // A version 1 plan's one step list, still checksummed exactly where it always was, so every
+        // already-published plan keeps the checksum it was published with.
+        boolean planWideSteps = root.has("steps");
+        if (planWideSteps) {
+            appendSteps(material, requiredArray(root, "steps"));
+        }
+        if (!planWideSteps && !everyFlowDeclaresSteps(executionSnapshot)) {
+            throw failure(BotControlFailure.INVALID_MESSAGE,
+                    "a compiled plan declares its steps once for the plan or once per flow, never neither");
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(material.toString().getBytes(StandardCharsets.UTF_8));
+            return "sha256:" + HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is required by the Java runtime", exception);
+        }
+    }
+
+    /** True when every flow carries its own steps, which is what a version 2 plan looks like. */
+    private static boolean everyFlowDeclaresSteps(JsonNode executionSnapshot) {
+        for (JsonNode partition : requiredArray(executionSnapshot, "partitions")) {
+            for (JsonNode flow : requiredArray(partition, "flows")) {
+                if (!flow.has("steps")) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * One step list's contribution to the checksum material.
+     *
+     * <p>Shared by both plan versions so a container's steps hash the same whether they sit on the plan
+     * or on the flow. Arguments are sorted by name, because JSON object order is not part of the
+     * contract and two producers writing the same arguments differently must agree.
+     */
+    private static void appendSteps(StringBuilder material, JsonNode steps) {
         if (steps.isEmpty()) {
             throw failure(BotControlFailure.INVALID_MESSAGE, "steps must not be empty");
         }
@@ -243,13 +287,6 @@ public final class StrategyBotContractCodec {
             names.stream().sorted().forEach(name -> material.append('|').append(name).append('=')
                     .append(requiredText(arguments, name)));
         });
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(material.toString().getBytes(StandardCharsets.UTF_8));
-            return "sha256:" + HexFormat.of().formatHex(digest);
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is required by the Java runtime", exception);
-        }
     }
 
     private static JsonNode requiredArray(JsonNode parent, String name) {

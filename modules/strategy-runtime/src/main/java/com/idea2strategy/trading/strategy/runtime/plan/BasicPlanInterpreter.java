@@ -47,8 +47,22 @@ import java.util.UUID;
  */
 public final class BasicPlanInterpreter {
 
-    /** The plan schema this interpreter understands. */
+    /** The plan schema a single-container strategy still arrives on. */
     public static final String PLAN_SCHEMA_VERSION = "basic-compiled-plan.v1";
+
+    /**
+     * The plan schema a strategy with more than one trade container arrives on.
+     *
+     * <p>A Basic strategy is one container per side — a buy container and a sell container — and the
+     * blocks inside a container are an AND chain: every condition has to hold before that container
+     * emits. Version 1 could not express that, because it carried a single {@code steps} list and a
+     * single side for the whole plan, so a strategy with both containers had no shape to be published
+     * in and was refused at release (root #202). Version 2 moves {@code side}, {@code allocation} and
+     * {@code steps} onto each flow, which is where they always belonged.
+     *
+     * <p>Version 1 is still read exactly as before, so every already-released bot keeps loading.
+     */
+    public static final String MULTI_CONTAINER_PLAN_SCHEMA_VERSION = "basic-compiled-plan.v2";
 
     private static final String LOAD_FEATURE = "LOAD_FEATURE";
     private static final String COMPARE = "COMPARE";
@@ -56,30 +70,24 @@ public final class BasicPlanInterpreter {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /** Interprets a plan document into the flows and the side the terminal step declares. */
+    /**
+     * Interprets a plan document into its flows, each with the side its own container declares.
+     *
+     * <p>Version 2 reads {@code side}, {@code allocation} and {@code steps} from each flow, which is
+     * how a strategy with a buy container and a sell container is expressed. Version 1 reads them once
+     * from the plan and gives every flow the same ones, which is what a single-container strategy
+     * means and what every bot released before version 2 carries.
+     */
     public InterpretedPlan interpret(String planDocument) {
         JsonNode root = parse(Objects.requireNonNull(planDocument, "planDocument"));
         String schemaVersion = text(root, "schemaVersion");
-        if (!PLAN_SCHEMA_VERSION.equals(schemaVersion)) {
-            throw reject("plan schemaVersion " + schemaVersion + " is not " + PLAN_SCHEMA_VERSION);
+        boolean perFlow = MULTI_CONTAINER_PLAN_SCHEMA_VERSION.equals(schemaVersion);
+        if (!perFlow && !PLAN_SCHEMA_VERSION.equals(schemaVersion)) {
+            throw reject("plan schemaVersion " + schemaVersion + " is neither "
+                    + PLAN_SCHEMA_VERSION + " nor " + MULTI_CONTAINER_PLAN_SCHEMA_VERSION);
         }
 
-        List<PlanStep> steps = steps(root);
-        PlanStep terminal = steps.getLast();
-        if (!EMIT_ORDER_CANDIDATE.equals(terminal.operation())) {
-            throw reject("a compiled plan must end with " + EMIT_ORDER_CANDIDATE);
-        }
-        List<PlanStep> conditionSteps = steps.subList(0, steps.size() - 1);
-        if (conditionSteps.isEmpty()) {
-            throw reject("an unconditional plan would emit an order on every event");
-        }
-        BasicOrderSide side = BasicOrderSide.valueOf(argument(terminal, "side"));
-        String allocation = argument(terminal, "allocation");
-
-        List<BasicConditionStep> compiled = new ArrayList<>();
-        for (PlanStep step : conditionSteps) {
-            compiled.add(new BasicConditionStep(step.stepId(), evaluatorFor(step)));
-        }
+        CompiledContainer planWide = perFlow ? null : container(root, "plan");
 
         List<BasicFlow> flows = new ArrayList<>();
         Map<String, String> partitionKeyByFlowKey = new LinkedHashMap<>();
@@ -101,14 +109,51 @@ public final class BasicPlanInterpreter {
                     throw reject("flow " + flowKey + " declares no official instruments");
                 }
                 instrumentNodes.forEach(node -> instruments.add(UUID.fromString(node.asText())));
-                flows.add(new BasicFlow(flowKey, side, instruments, compiled));
+                CompiledContainer container =
+                        perFlow ? container(flowNode, "flow " + flowKey) : planWide;
+                flows.add(new BasicFlow(
+                        flowKey, container.side(), instruments, container.conditionSteps()));
                 if (partitionKeyByFlowKey.put(flowKey, partitionKey) != null) {
                     throw reject("flow key " + flowKey + " is declared more than once");
                 }
             }
         }
-        return new InterpretedPlan(flows, side, allocation, Map.copyOf(partitionKeyByFlowKey));
+        if (flows.isEmpty()) {
+            throw reject("a compiled plan declares no flows");
+        }
+        return new InterpretedPlan(flows, Map.copyOf(partitionKeyByFlowKey));
     }
+
+    /**
+     * One container's compiled condition chain, its side and its allocation.
+     *
+     * <p>The chain is an AND: the executor runs the steps in order and stops at the first that does not
+     * pass, so a container with three blocks buys only when all three hold. The terminal
+     * {@code EMIT_ORDER_CANDIDATE} is not a condition — it is where the side and the allocation are
+     * declared — so it is consumed here rather than evaluated per instrument.
+     */
+    private CompiledContainer container(JsonNode owner, String description) {
+        List<PlanStep> steps = steps(owner);
+        PlanStep terminal = steps.getLast();
+        if (!EMIT_ORDER_CANDIDATE.equals(terminal.operation())) {
+            throw reject(description + " must end with " + EMIT_ORDER_CANDIDATE);
+        }
+        List<PlanStep> conditionSteps = steps.subList(0, steps.size() - 1);
+        if (conditionSteps.isEmpty()) {
+            throw reject("an unconditional " + description + " would emit an order on every event");
+        }
+        List<BasicConditionStep> compiled = new ArrayList<>();
+        for (PlanStep step : conditionSteps) {
+            compiled.add(new BasicConditionStep(step.stepId(), evaluatorFor(step)));
+        }
+        return new CompiledContainer(
+                BasicOrderSide.valueOf(argument(terminal, "side")),
+                argument(terminal, "allocation"),
+                List.copyOf(compiled));
+    }
+
+    private record CompiledContainer(
+            BasicOrderSide side, String allocation, List<BasicConditionStep> conditionSteps) {}
 
     /**
      * The evaluator for one plan step.
@@ -233,17 +278,20 @@ public final class BasicPlanInterpreter {
         return new IllegalArgumentException("compiled plan is not executable: " + detail);
     }
 
-    /** What the interpreter produced from one plan document. */
+    /**
+     * What the interpreter produced from one plan document.
+     *
+     * <p>There is deliberately no plan-level side or allocation. A Basic strategy has one container per
+     * side, so a single side for the whole plan could only ever describe one of them — that fiction is
+     * what made a buy-and-sell strategy unpublishable (root #202). The side and the allocation belong to
+     * the flow, which is what the executor runs and what each decision reports.
+     */
     public record InterpretedPlan(
             List<BasicFlow> flows,
-            BasicOrderSide side,
-            String allocation,
             Map<String, String> partitionKeyByFlowKey) {
 
         public InterpretedPlan {
             flows = List.copyOf(Objects.requireNonNull(flows, "flows"));
-            Objects.requireNonNull(side, "side");
-            Objects.requireNonNull(allocation, "allocation");
             partitionKeyByFlowKey = Map.copyOf(
                     Objects.requireNonNull(partitionKeyByFlowKey, "partitionKeyByFlowKey"));
             if (flows.isEmpty()) {
