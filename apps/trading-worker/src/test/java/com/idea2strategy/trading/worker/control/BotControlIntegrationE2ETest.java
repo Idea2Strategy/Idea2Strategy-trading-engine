@@ -254,10 +254,10 @@ class BotControlIntegrationE2ETest {
      * start does, so the bot that was already trading keeps trading and the canonical record is
      * unchanged.
      *
-     * <p>Note what this does <em>not</em> claim: re-registration resets the bot's view of the market
-     * sequence, so a market event replayed after a redelivered start would be evaluated a second time
-     * and would produce a second intent batch. Deduplicating market events by their own identity
-     * belongs to the market transport, trading#107, and is not settled here.
+     * <p>Re-registration resets the bot's in-memory market sequence, so a replayed market event reaches
+     * evaluation again. Its evaluation and candidate-batch identities are derived from the stable
+     * market-event identity, however, so the durable claim boundary converges on the existing rows.
+     * {@code EvaluationLoopE2ETest} proves that replacement-process boundary explicitly.
      */
     @Test
     void aRunCommandRedeliveredAfterALapsedLeaseWritesNothingNew() {
