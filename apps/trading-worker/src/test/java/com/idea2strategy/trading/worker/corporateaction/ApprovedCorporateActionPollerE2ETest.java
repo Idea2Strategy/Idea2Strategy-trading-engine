@@ -2,10 +2,12 @@ package com.idea2strategy.trading.worker.corporateaction;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.idea2strategy.trading.application.corporateaction.CorporateActionService;
+import com.idea2strategy.trading.application.port.CorporateActionStore;
 import com.idea2strategy.trading.application.order.FillOrderCommand;
 import com.idea2strategy.trading.domain.fill.FillAllocation;
 import com.idea2strategy.trading.domain.fill.FillPosting;
@@ -36,6 +38,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -88,6 +91,13 @@ class ApprovedCorporateActionPollerE2ETest {
     private static final UUID LONELY_SPLIT = UUID.fromString("f9200000-0000-4000-8000-000000000035");
     /** Supersedes APPLIED_SPLIT after it already moved lots: refused durably. */
     private static final UUID LATE_SUPERSEDE = UUID.fromString("f9200000-0000-4000-8000-000000000036");
+    /** A transient store failure must leave no receipt and succeed on the next poll. */
+    private static final UUID RETRIED_SPLIT = UUID.fromString("f9200000-0000-4000-8000-000000000037");
+    /** Two independent effective dates pin the canonical polling order. */
+    private static final UUID EARLIER_ORDERED_SPLIT =
+            UUID.fromString("f9200000-0000-4000-8000-000000000038");
+    private static final UUID LATER_ORDERED_SPLIT =
+            UUID.fromString("f9200000-0000-4000-8000-000000000039");
 
     private static final Instant T0 = Instant.parse("2026-08-03T14:30:00Z");
     private static final Instant DECIDED_AT = Instant.parse("2026-08-04T09:00:00Z");
@@ -253,6 +263,85 @@ class ApprovedCorporateActionPollerE2ETest {
                 () -> assertEquals(0, movementCount(LATE_SUPERSEDE)),
                 // The applied movements stand: refusal never reverses official history.
                 () -> assertEquals(3, movementCount(APPLIED_SPLIT)));
+    }
+
+    @Test
+    @Order(4)
+    void retriesATransientFailureWithoutLeavingPartialBusinessState() throws Exception {
+        insertAction(RETRIED_SPLIT, INSTRUMENT, MANIFEST, "retry-2-for-1",
+                EFFECTIVE_AT.plusSeconds(1), 2, 1, null,
+                approvedReview(RETRIED_SPLIT, termsHash(RETRIED_SPLIT)));
+
+        CorporateActionStore canonical = new PostgresCorporateActionStore(jdbc, transactions);
+        AtomicInteger attempts = new AtomicInteger();
+        CorporateActionStore failsOnce = application -> {
+            if (application.action().actionId().equals(RETRIED_SPLIT)
+                    && attempts.getAndIncrement() == 0) {
+                throw new IllegalStateException("temporary database interruption");
+            }
+            return canonical.apply(application);
+        };
+        ApprovedCorporateActionPoller retrying = poller(new CorporateActionService(failsOnce));
+
+        assertThrows(IllegalStateException.class, () -> retrying.pollOnce(1));
+        assertAll(
+                () -> assertEquals(0, movementCount(RETRIED_SPLIT)),
+                () -> assertEquals(0,
+                        facts(ApprovedCorporateActionPoller.APPLIED_TYPE, RETRIED_SPLIT)),
+                () -> assertEquals(0, botEvents(RETRIED_SPLIT)));
+
+        assertEquals(1, retrying.pollOnce(1));
+        assertAll(
+                () -> assertEquals(3, movementCount(RETRIED_SPLIT)),
+                () -> assertEquals(1,
+                        facts(ApprovedCorporateActionPoller.APPLIED_TYPE, RETRIED_SPLIT)),
+                () -> assertEquals(2, botEvents(RETRIED_SPLIT)));
+    }
+
+    @Test
+    @Order(5)
+    void processesDurableInputByEffectiveTimeThenStableIdentity() throws Exception {
+        insertAction(LATER_ORDERED_SPLIT, LONELY_INSTRUMENT, LONELY_MANIFEST,
+                "ordered-later", EFFECTIVE_AT.plusSeconds(3), 1, 1, null,
+                approvedReview(LATER_ORDERED_SPLIT, termsHash(LATER_ORDERED_SPLIT)));
+        insertAction(EARLIER_ORDERED_SPLIT, LONELY_INSTRUMENT, LONELY_MANIFEST,
+                "ordered-earlier", EFFECTIVE_AT.plusSeconds(2), 1, 1, null,
+                approvedReview(EARLIER_ORDERED_SPLIT, termsHash(EARLIER_ORDERED_SPLIT)));
+
+        assertEquals(1, poller.pollOnce(1));
+        assertAll(
+                () -> assertEquals(1,
+                        facts(ApprovedCorporateActionPoller.APPLIED_TYPE, EARLIER_ORDERED_SPLIT)),
+                () -> assertEquals(0,
+                        facts(ApprovedCorporateActionPoller.APPLIED_TYPE, LATER_ORDERED_SPLIT)));
+
+        assertEquals(1, poller.pollOnce(1));
+        assertEquals(1, facts(ApprovedCorporateActionPoller.APPLIED_TYPE, LATER_ORDERED_SPLIT));
+    }
+
+    private static ApprovedCorporateActionPoller poller(CorporateActionService service) {
+        return new ApprovedCorporateActionPoller(
+                jdbc, new PostgresBotEventStore(jdbc, transactions), service,
+                new ObjectMapper(), Clock.fixed(NOW, ZoneOffset.UTC), transactions);
+    }
+
+    private static void insertAction(UUID id, UUID instrumentId, UUID manifestId,
+            String providerEventKey, Instant effectiveAt, long to, long from, UUID supersedes,
+            String review) throws Exception {
+        try (Connection connection = dataSource.getConnection();
+                Statement statement = connection.createStatement()) {
+            statement.execute(action(id, instrumentId, manifestId, providerEventKey,
+                    effectiveAt, to, from, supersedes, review));
+        }
+    }
+
+    private static int botEvents(UUID actionId) {
+        return jdbc.sql("""
+                        select count(*) from bot.bot_events
+                        where event_type = 'CORPORATE_ACTION_APPLIED'
+                          and idempotency_key = 'CORPORATE_ACTION_APPLIED:' || :actionId
+                        """)
+                .param("actionId", actionId.toString()).query(Integer.class).single();
     }
 
     private static int movementCount(UUID actionId) {
