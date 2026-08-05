@@ -66,7 +66,8 @@ class CanonicalBaselineContractTest {
                         "V20260804160020__pipeline_dataset_manifest_empty_hash.sql",
                         "V20260804160100__backtest_runtime_ownership_constrain.sql",
                         "V20260805010000__pipeline_upgrade_legacy_market_schema.sql",
-                        "V20260805130000__backtest_run_input_pins.sql")),
+                        "V20260805130000__backtest_run_input_pins.sql",
+                        "V20260805153000__trading_add_candidate_batch_processing.sql")),
                 "the pinned baseline must include the central backtest runtime ownership migration set");
     }
 
@@ -79,7 +80,7 @@ class CanonicalBaselineContractTest {
                 .param(APPLICATION_SCHEMAS.toArray(String[]::new))
                 .query(Integer.class)
                 .single();
-        assertEquals(178, tables, "the pinned canonical baseline no longer produces the canonical schema");
+        assertEquals(179, tables, "the pinned canonical baseline no longer produces the canonical schema");
     }
 
     @Test
@@ -111,7 +112,7 @@ class CanonicalBaselineContractTest {
                 "execution_resource_reservation", "execution_fill_record",
                 "official_ledger_transaction", "official_ledger_entry",
                 "execution_position_lot", "execution_flow_position_projection",
-                "bot_stop_settlement", "virtual_fill_decision", "candidate_batch_processing")) {
+                "bot_stop_settlement", "virtual_fill_decision")) {
             assertFalse(
                     exists("trading", table),
                     "trading." + table + " is a private compatibility relation and must never be "
