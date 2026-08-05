@@ -46,6 +46,8 @@ public enum BotEventType {
     INITIAL_CAPITAL_POSTED,
     /** Borrow fee was accrued against an open short lot. */
     SHORT_BORROW_FEE_ACCRUED,
+    /** An approved corporate action re-denominated this bot's open lots. */
+    CORPORATE_ACTION_APPLIED,
     /** The platform generated a forced close for a bot stop, risk breach or competition end. */
     SYSTEM_CLOSE_REQUESTED,
 
