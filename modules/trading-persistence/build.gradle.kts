@@ -26,3 +26,8 @@ dependencies {
     testImplementation("org.testcontainers:postgresql")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
+
+tasks.withType<Test>().configureEach {
+    inputs.dir(rootProject.layout.projectDirectory.dir("db/canonical-baseline"))
+        .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.RELATIVE)
+}
