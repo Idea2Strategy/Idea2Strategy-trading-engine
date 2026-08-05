@@ -373,7 +373,8 @@ class CorporateActionPersistenceTest {
 
     /**
      * Only a split the market data owner approved and confirmed may be applied. Canonical says
-     * "confirmed" with an {@code AVAILABLE} source dataset and the absence of a later revision, and
+     * "confirmed" with an {@code AVAILABLE} source dataset and the absence of a later approved
+     * revision, and
      * an action it never published cannot be applied at all — there is nothing this service could
      * derive that would stand in for one.
      */
@@ -455,14 +456,17 @@ class CorporateActionPersistenceTest {
 
     private static String corporateAction(
             UUID id, UUID manifestId, String providerEventKey, long to, long from, UUID supersedes) {
+        String review = supersedes == null
+                ? ""
+                : ",\"review\":{\"state\":\"APPROVED\"}";
         return """
                 insert into market_data.corporate_actions (id, instrument_id, source_manifest_id,
                     provider_event_key, action_type, effective_at, terms_document, terms_hash,
                     supersedes_action_id)
                 values ('%s', '%s', '%s', '%s', 'SPLIT', '%s',
-                    '{"actionType":"SPLIT","ratio":{"from":%d,"to":%d}}', '%s', %s)
+                    '{"actionType":"SPLIT","ratio":{"from":%d,"to":%d}%s}', '%s', %s)
                 """.formatted(id, INSTRUMENT, manifestId, providerEventKey, EFFECTIVE_AT, from, to,
-                termsHash(id), supersedes == null ? "null" : "'" + supersedes + "'");
+                review, termsHash(id), supersedes == null ? "null" : "'" + supersedes + "'");
     }
 
     /** Opens one real canonical lot through the order, fill and position write paths. */

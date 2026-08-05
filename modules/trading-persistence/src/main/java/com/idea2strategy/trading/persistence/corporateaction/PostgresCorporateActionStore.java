@@ -171,6 +171,7 @@ public class PostgresCorporateActionStore implements CorporateActionStore {
                                exists (
                                    select 1 from market_data.corporate_actions later
                                     where later.supersedes_action_id = corporate_action.id
+                                      and later.terms_document #>> '{review,state}' = 'APPROVED'
                                ) as superseded
                         from market_data.corporate_actions corporate_action
                         join market_data.dataset_manifests manifest

@@ -103,7 +103,8 @@ public final class ApprovedCorporateActionPoller {
               and cast(manifest.status as varchar) = :available
               and not exists (
                   select 1 from market_data.corporate_actions later
-                  where later.supersedes_action_id = action.id)
+                  where later.supersedes_action_id = action.id
+                    and later.terms_document #>> '{review,state}' = 'APPROVED')
               and not exists (
                   select 1 from operations.outbox_messages fact
                   where fact.owner_domain = 'trading'

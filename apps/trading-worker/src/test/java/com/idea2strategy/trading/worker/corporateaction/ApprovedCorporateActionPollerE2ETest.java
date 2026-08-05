@@ -98,6 +98,9 @@ class ApprovedCorporateActionPollerE2ETest {
             UUID.fromString("f9200000-0000-4000-8000-000000000038");
     private static final UUID LATER_ORDERED_SPLIT =
             UUID.fromString("f9200000-0000-4000-8000-000000000039");
+    /** Research can name a predecessor before review; it is not an official supersede yet. */
+    private static final UUID UNAPPROVED_REVISION =
+            UUID.fromString("f9200000-0000-4000-8000-000000000040");
 
     private static final Instant T0 = Instant.parse("2026-08-03T14:30:00Z");
     private static final Instant DECIDED_AT = Instant.parse("2026-08-04T09:00:00Z");
@@ -158,6 +161,9 @@ class ApprovedCorporateActionPollerE2ETest {
                     approvedReview(FUTURE_SPLIT, termsHash(FUTURE_SPLIT))));
             statement.addBatch(action(STALE_HASH, INSTRUMENT, MANIFEST, "stale-hash",
                     EFFECTIVE_AT, 2, 1, null, approvedReview(STALE_HASH, "0".repeat(64))));
+            statement.addBatch(action(UNAPPROVED_REVISION, INSTRUMENT, MANIFEST,
+                    "unapproved-revision", EFFECTIVE_AT, 3, 1, APPLIED_SPLIT,
+                    "\"review\":{\"state\":\"REVIEW_REQUIRED\"}"));
             statement.executeBatch();
             statement.execute("""
                     insert into market_data.corporate_actions (id, instrument_id,
@@ -206,6 +212,8 @@ class ApprovedCorporateActionPollerE2ETest {
                 () -> assertEquals(1, facts(ApprovedCorporateActionPoller.APPLIED_TYPE, APPLIED_SPLIT)),
                 () -> assertEquals(1, facts(ApprovedCorporateActionPoller.APPLIED_TYPE, LONELY_SPLIT)),
                 () -> assertEquals(0, facts(ApprovedCorporateActionPoller.APPLIED_TYPE, PENDING_REVIEW)),
+                () -> assertEquals(0,
+                        facts(ApprovedCorporateActionPoller.APPLIED_TYPE, UNAPPROVED_REVISION)),
                 () -> assertEquals(0, facts(ApprovedCorporateActionPoller.APPLIED_TYPE, FUTURE_SPLIT)),
                 () -> assertEquals(1, facts(ApprovedCorporateActionPoller.REJECTED_TYPE, STALE_HASH)),
                 () -> assertEquals(1, facts(ApprovedCorporateActionPoller.REJECTED_TYPE, DIVIDEND)),
@@ -214,6 +222,7 @@ class ApprovedCorporateActionPollerE2ETest {
                 () -> assertEquals(0, movementCount(STALE_HASH)),
                 () -> assertEquals(0, movementCount(DIVIDEND)),
                 () -> assertEquals(0, movementCount(PENDING_REVIEW)),
+                () -> assertEquals(0, movementCount(UNAPPROVED_REVISION)),
                 () -> assertEquals(0, movementCount(FUTURE_SPLIT)));
 
         // The refusals also left the audit trail the card demands.
