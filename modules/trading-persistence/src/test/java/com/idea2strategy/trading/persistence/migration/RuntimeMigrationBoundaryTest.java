@@ -52,6 +52,20 @@ class RuntimeMigrationBoundaryTest {
                         + "through db/migration-contributions/migrations instead.");
     }
 
+    @Test
+    void candidateReceiptCompatibilityMigrationToleratesTheCanonicalTable() throws IOException {
+        String sql = Files.readString(repositoryRoot().resolve(
+                "modules/trading-persistence/src/main/resources/db/migration/"
+                        + "V2026080101__create_candidate_batch_processing.sql"));
+
+        assertTrue(
+                sql.toLowerCase().contains("create table if not exists trading.candidate_batch_processing"),
+                "the private compatibility migration must tolerate a canonical table applied first");
+        assertTrue(
+                sql.toLowerCase().contains("create index if not exists candidate_batch_processing_evaluation_idx"),
+                "the private compatibility migration must tolerate the canonical index applied first");
+    }
+
     private static Path repositoryRoot() {
         Path current = Path.of("").toAbsolutePath();
         while (current != null && !Files.isRegularFile(current.resolve("settings.gradle.kts"))) {
