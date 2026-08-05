@@ -46,6 +46,22 @@ class AlpacaSipRightsGateTest {
     }
 
     @Test
+    void exactConfiguredFeedMustMatchTheRightsEvidence() {
+        ProviderRightsGate sipEvidence = new ProviderRightsGate(
+                () -> new ProviderRightsEvidence("alpaca", "sip", NOW.minusSeconds(1), NOW.plusSeconds(60)),
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThrows(
+                ProviderRightsUnavailableException.class,
+                () -> sipEvidence.requireCurrentAlpacaRights(AlpacaDataFeed.IEX));
+
+        ProviderRightsGate iexEvidence = new ProviderRightsGate(
+                () -> new ProviderRightsEvidence("alpaca", "iex", NOW.minusSeconds(1), NOW.plusSeconds(60)),
+                Clock.fixed(NOW, ZoneOffset.UTC));
+        assertEquals("iex", iexEvidence.requireCurrentAlpacaRights(AlpacaDataFeed.IEX).feed());
+    }
+
+    @Test
     void subscriptionIsActiveOnlyAfterTheEntireUniverseIsApproved() {
         AtomicInteger credentialLoads = new AtomicInteger();
         RecordingTransport transport = new RecordingTransport();
