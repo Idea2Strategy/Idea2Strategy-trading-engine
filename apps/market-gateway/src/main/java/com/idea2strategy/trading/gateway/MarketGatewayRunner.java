@@ -2,6 +2,7 @@ package com.idea2strategy.trading.gateway;
 
 import com.idea2strategy.trading.common.runtime.FileReadinessMarker;
 import com.idea2strategy.trading.market.alpaca.AlpacaCredentialsProvider;
+import com.idea2strategy.trading.market.alpaca.AlpacaDataFeed;
 import com.idea2strategy.trading.market.alpaca.AlpacaMarketEventNormalizer;
 import com.idea2strategy.trading.market.alpaca.AlpacaSipInboundMessage;
 import com.idea2strategy.trading.market.alpaca.AlpacaSipMessageParser;
@@ -47,6 +48,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(MarketGatewayRunner.class);
 
     private final URI endpoint;
+    private final AlpacaDataFeed feed;
     private final ApprovedSymbolUniverse universe;
     private final ProviderRightsGate rightsGate;
     private final AlpacaCredentialsProvider credentialsProvider;
@@ -73,6 +75,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
 
     public MarketGatewayRunner(
             URI endpoint,
+            AlpacaDataFeed feed,
             ApprovedSymbolUniverse universe,
             ProviderRightsGate rightsGate,
             AlpacaCredentialsProvider credentialsProvider,
@@ -84,6 +87,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
             ReconnectBackoff backoff,
             Clock clock) {
         this.endpoint = Objects.requireNonNull(endpoint, "endpoint");
+        this.feed = Objects.requireNonNull(feed, "feed");
         this.universe = Objects.requireNonNull(universe, "universe");
         this.rightsGate = Objects.requireNonNull(rightsGate, "rightsGate");
         this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "credentialsProvider");
@@ -98,7 +102,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
 
     @Override
     public void start() {
-        rightsGate.requireCurrentAlpacaSipRights();
+        rightsGate.requireCurrentAlpacaRights(feed);
         credentialsProvider.load();
         running = true;
         log.info("market-gateway connecting to {} for {} symbols", endpoint, universe.symbols().size());
@@ -129,7 +133,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
                 .buildAsync(endpoint, new SipListener())
                 .whenComplete((socket, failure) -> {
                     if (failure != null) {
-                        log.warn("Alpaca SIP connection attempt failed: {}", failure.toString());
+                        log.warn("Alpaca {} connection attempt failed: {}", feed.eventValue(), failure.toString());
                         scheduleReconnect();
                         return;
                     }
@@ -143,13 +147,13 @@ public final class MarketGatewayRunner implements SmartLifecycle {
         }
         int attempt = failedAttempts.incrementAndGet();
         Duration delay = backoff.delayForAttempt(attempt);
-        log.info("Alpaca SIP reconnect attempt {} in {}", attempt, delay);
+        log.info("Alpaca {} reconnect attempt {} in {}", feed.eventValue(), attempt, delay);
         scheduler.schedule(this::connect, delay.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private void stopForRightsFailure(ProviderRightsUnavailableException failure) {
-        log.error("Alpaca SIP rights are no longer verified; the gateway stays down until restarted "
-                + "with current rights evidence", failure);
+        log.error("Alpaca {} rights are no longer verified; the gateway stays down until restarted "
+                + "with current rights evidence", feed.eventValue(), failure);
         running = false;
         readinessMarker.markNotReady();
         WebSocket socket = activeSocket.getAndSet(null);
@@ -168,7 +172,8 @@ public final class MarketGatewayRunner implements SmartLifecycle {
                     universe,
                     rightsGate,
                     credentialsProvider,
-                    AlpacaSipWebSocketTransport.connected(webSocket));
+                    AlpacaSipWebSocketTransport.connected(webSocket),
+                    feed);
             webSocket.request(1);
         }
 
@@ -203,7 +208,8 @@ public final class MarketGatewayRunner implements SmartLifecycle {
             } catch (ProviderRightsUnavailableException exception) {
                 stopForRightsFailure(exception);
             } catch (RuntimeException exception) {
-                log.error("Alpaca SIP frame handling failed; dropping the connection to resynchronize", exception);
+                log.error("Alpaca {} frame handling failed; dropping the connection to resynchronize",
+                        feed.eventValue(), exception);
                 webSocket.abort();
             }
         }
@@ -216,10 +222,11 @@ public final class MarketGatewayRunner implements SmartLifecycle {
                     subscription.onSubscriptionApproved(confirmed.barSymbols());
                     failedAttempts.set(0);
                     readinessMarker.markReady();
-                    log.info("Alpaca SIP subscription active for {} symbols", confirmed.barSymbols().size());
+                    log.info("Alpaca {} subscription active for {} symbols",
+                            feed.eventValue(), confirmed.barSymbols().size());
                 }
                 case AlpacaSipInboundMessage.ProviderError error -> {
-                    log.warn("Alpaca SIP error {}: {}", error.code(), error.message());
+                    log.warn("Alpaca {} error {}: {}", feed.eventValue(), error.code(), error.message());
                     readinessMarker.markNotReady();
                     publishUnavailable(MarketDataDegradationReason.PROVIDER_DISCONNECTED);
                 }
@@ -254,11 +261,11 @@ public final class MarketGatewayRunner implements SmartLifecycle {
             activeSocket.set(null);
             publishUnavailable(MarketDataDegradationReason.PROVIDER_DISCONNECTED);
             if (!unpublishedFrames.isEmpty()) {
-                log.info("Alpaca SIP frames received without a publishing path this connection: {}",
-                        unpublishedFrames);
+                log.info("Alpaca {} frames received without a publishing path this connection: {}",
+                        feed.eventValue(), unpublishedFrames);
                 unpublishedFrames.clear();
             }
-            log.info("Alpaca SIP connection {}", reason);
+            log.info("Alpaca {} connection {}", feed.eventValue(), reason);
             scheduleReconnect();
         }
     }

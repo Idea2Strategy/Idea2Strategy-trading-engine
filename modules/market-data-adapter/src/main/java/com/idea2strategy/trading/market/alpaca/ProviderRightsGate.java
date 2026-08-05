@@ -14,15 +14,23 @@ public final class ProviderRightsGate {
     }
 
     public ProviderRightsEvidence requireCurrentAlpacaSipRights() {
+        return requireCurrentAlpacaRights(AlpacaDataFeed.SIP);
+    }
+
+    public ProviderRightsEvidence requireCurrentAlpacaRights(AlpacaDataFeed feed) {
+        Objects.requireNonNull(feed, "feed");
         ProviderRightsEvidence evidence = evidenceSupplier.get();
         if (evidence == null) {
-            throw new ProviderRightsUnavailableException("Alpaca SIP rights verification is missing");
+            throw new ProviderRightsUnavailableException(
+                    "Alpaca " + feed.eventValue() + " rights verification is missing");
         }
-        if (!"alpaca".equals(evidence.provider()) || !"sip".equals(evidence.feed())) {
-            throw new ProviderRightsUnavailableException("Rights evidence does not authorize Alpaca SIP");
+        if (!"alpaca".equals(evidence.provider()) || !feed.wireName().equals(evidence.feed())) {
+            throw new ProviderRightsUnavailableException(
+                    "Rights evidence does not authorize Alpaca " + feed.eventValue());
         }
         if (!evidence.isCurrentAt(clock.instant())) {
-            throw new ProviderRightsUnavailableException("Alpaca SIP rights verification is not current");
+            throw new ProviderRightsUnavailableException(
+                    "Alpaca " + feed.eventValue() + " rights verification is not current");
         }
         return evidence;
     }

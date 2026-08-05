@@ -17,6 +17,18 @@ class AlpacaSipMessageParserTest {
     private final AlpacaSipMessageParser parser = new AlpacaSipMessageParser();
 
     @Test
+    void configuredIexFeedIsPreservedInTheProviderNeutralEvent() {
+        AlpacaSipMessageParser iexParser = new AlpacaSipMessageParser(AlpacaDataFeed.IEX);
+
+        AlpacaSipInboundMessage.MinuteBar bar = (AlpacaSipInboundMessage.MinuteBar) iexParser.parse(
+                "[{\"T\":\"b\",\"S\":\"AAPL\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,\"v\":1,"
+                        + "\"t\":\"2026-07-31T14:30:00Z\"}]",
+                RECEIVED_AT).get(0);
+
+        assertEquals("IEX", bar.input().feed());
+    }
+
+    @Test
     void parsesTheOfficialControlFrameSequence() {
         assertEquals(
                 List.of(new AlpacaSipInboundMessage.Connected()),

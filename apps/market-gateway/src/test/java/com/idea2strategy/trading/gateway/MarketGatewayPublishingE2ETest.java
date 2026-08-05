@@ -103,6 +103,27 @@ class MarketGatewayPublishingE2ETest {
     }
 
     @Test
+    void explicitIexFallbackPublishesTruthfulIexEvents() throws Exception {
+        FakeAlpacaSipServer server = new FakeAlpacaSipServer(0);
+        Path mapping = mapping();
+        server.startAndAwait();
+        try {
+            Path rights = validRights("iex");
+            try (ConfigurableApplicationContext context = gateway(server.port(), rights, mapping, "iex")) {
+                RedisMarketEventPublisher publisher = context.getBean(RedisMarketEventPublisher.class);
+
+                waitUntil(() -> publisher.streamLength() >= 1, Duration.ofSeconds(30));
+                MarketEventEnvelope latest =
+                        publisher.findLatest(AAPL_ID, MarketEventType.BAR_1M).orElseThrow();
+                assertEquals("ALPACA", latest.provider());
+                assertEquals("IEX", latest.feed());
+            }
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
     void expiredRightsEvidenceBlocksStartup() throws IOException {
         Path rights = rightsFile(Instant.now().minusSeconds(7200), Instant.now().minusSeconds(3600));
         Exception failure = assertThrows(
@@ -138,8 +159,21 @@ class MarketGatewayPublishingE2ETest {
         return gateway(port, rights, mapping, receipt(rights, mapping));
     }
 
+    private ConfigurableApplicationContext gateway(int port, Path rights, Path mapping, String feed)
+            throws IOException {
+        String[] properties = baseProperties(port, rights, mapping, receipt(rights, mapping));
+        String[] withFeed = new String[properties.length + 1];
+        System.arraycopy(properties, 0, withFeed, 0, properties.length);
+        withFeed[properties.length] = "market-gateway.alpaca-feed=" + feed;
+        return gateway(withFeed);
+    }
+
     private ConfigurableApplicationContext gateway(int port, Path rights, Path mapping, Path receipt) {
         String[] properties = baseProperties(port, rights, mapping, receipt);
+        return gateway(properties);
+    }
+
+    private ConfigurableApplicationContext gateway(String[] properties) {
         String[] withCredentials = new String[properties.length + 2];
         System.arraycopy(properties, 0, withCredentials, 0, properties.length);
         withCredentials[properties.length] = "ALPACA_API_KEY=test-key";
@@ -206,12 +240,20 @@ class MarketGatewayPublishingE2ETest {
     }
 
     private Path validRights() throws IOException {
-        return rightsFile(Instant.now().minusSeconds(60), Instant.now().plusSeconds(3600));
+        return validRights("sip");
+    }
+
+    private Path validRights(String feed) throws IOException {
+        return rightsFile(feed, Instant.now().minusSeconds(60), Instant.now().plusSeconds(3600));
     }
 
     private Path rightsFile(Instant verifiedAt, Instant expiresAt) throws IOException {
-        Path path = configDir.resolve("alpaca-sip-rights-" + UUID.randomUUID() + ".json");
-        Files.writeString(path, "{\"provider\":\"alpaca\",\"feed\":\"sip\","
+        return rightsFile("sip", verifiedAt, expiresAt);
+    }
+
+    private Path rightsFile(String feed, Instant verifiedAt, Instant expiresAt) throws IOException {
+        Path path = configDir.resolve("alpaca-" + feed + "-rights-" + UUID.randomUUID() + ".json");
+        Files.writeString(path, "{\"provider\":\"alpaca\",\"feed\":\"" + feed + "\","
                 + "\"verifiedAt\":\"" + verifiedAt + "\",\"expiresAt\":\"" + expiresAt + "\"}");
         return path;
     }

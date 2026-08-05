@@ -3,6 +3,7 @@ package com.idea2strategy.trading.gateway;
 import com.idea2strategy.trading.common.runtime.FileReadinessMarker;
 import com.idea2strategy.trading.common.runtime.MaterializationReceipt;
 import com.idea2strategy.trading.market.alpaca.AlpacaCredentialsProvider;
+import com.idea2strategy.trading.market.alpaca.AlpacaDataFeed;
 import com.idea2strategy.trading.market.alpaca.AlpacaMarketEventNormalizer;
 import com.idea2strategy.trading.market.alpaca.AlpacaSipMessageParser;
 import com.idea2strategy.trading.market.alpaca.ApprovedSymbolUniverse;
@@ -89,7 +90,8 @@ public class MarketGatewayConfiguration {
 
     @Bean
     MarketGatewayRunner marketGatewayRunner(
-            @Value("${market-gateway.alpaca-endpoint:wss://stream.data.alpaca.markets/v2/sip}") URI endpoint,
+            @Value("${market-gateway.alpaca-feed:sip}") String feedValue,
+            @Value("${market-gateway.alpaca-endpoint:}") String endpointValue,
             @Value("${market-gateway.reconnect-initial-delay:PT1S}") Duration reconnectInitialDelay,
             @Value("${market-gateway.reconnect-max-delay:PT1M}") Duration reconnectMaxDelay,
             ApprovedSymbolUniverse universe,
@@ -99,12 +101,16 @@ public class MarketGatewayConfiguration {
             RedisMarketEventPublisher publisher,
             FileReadinessMarker readinessMarker,
             Clock marketGatewayClock) {
+        AlpacaDataFeed feed = AlpacaDataFeed.parse(feedValue);
+        URI endpoint = endpointValue.isBlank() ? feed.officialEndpoint() : URI.create(endpointValue);
+        feed.validateEndpoint(endpoint);
         return new MarketGatewayRunner(
                 endpoint,
+                feed,
                 universe,
                 rightsGate,
                 credentialsProvider,
-                new AlpacaSipMessageParser(),
+                new AlpacaSipMessageParser(feed),
                 normalizer,
                 new MarketEventOrderingProcessor(),
                 publisher,

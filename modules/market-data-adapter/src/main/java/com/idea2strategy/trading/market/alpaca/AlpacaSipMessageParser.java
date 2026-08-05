@@ -17,13 +17,21 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class AlpacaSipMessageParser {
-    private static final String FEED = "SIP";
     private static final DateTimeFormatter BAR_EVENT_ID_FORMAT =
             DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
 
     private final ObjectMapper mapper = new ObjectMapper()
             .configure(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS, true)
             .configure(JsonNodeFeature.STRIP_TRAILING_BIGDECIMAL_ZEROES, false);
+    private final AlpacaDataFeed feed;
+
+    public AlpacaSipMessageParser() {
+        this(AlpacaDataFeed.SIP);
+    }
+
+    public AlpacaSipMessageParser(AlpacaDataFeed feed) {
+        this.feed = Objects.requireNonNull(feed, "feed");
+    }
 
     public List<AlpacaSipInboundMessage> parse(String frame, Instant receivedAt) {
         Objects.requireNonNull(frame, "frame");
@@ -39,12 +47,13 @@ public final class AlpacaSipMessageParser {
         }
         List<AlpacaSipInboundMessage> messages = new ArrayList<>();
         for (JsonNode node : root) {
-            messages.add(message(node, receivedAt));
+            messages.add(message(node, receivedAt, feed));
         }
         return List.copyOf(messages);
     }
 
-    private static AlpacaSipInboundMessage message(JsonNode node, Instant receivedAt) {
+    private static AlpacaSipInboundMessage message(
+            JsonNode node, Instant receivedAt, AlpacaDataFeed feed) {
         String type = text(node, "T");
         return switch (type) {
             case "success" -> switch (text(node, "msg")) {
@@ -55,18 +64,18 @@ public final class AlpacaSipMessageParser {
             case "subscription" -> new AlpacaSipInboundMessage.SubscriptionConfirmed(symbols(node));
             case "error" -> new AlpacaSipInboundMessage.ProviderError(
                     node.path("code").asInt(), node.path("msg").asText(""));
-            case "b" -> new AlpacaSipInboundMessage.MinuteBar(bar(node, receivedAt));
+            case "b" -> new AlpacaSipInboundMessage.MinuteBar(bar(node, receivedAt, feed));
             default -> new AlpacaSipInboundMessage.UnsupportedFrame(type);
         };
     }
 
-    private static AlpacaMarketInput bar(JsonNode node, Instant receivedAt) {
+    private static AlpacaMarketInput bar(JsonNode node, Instant receivedAt, AlpacaDataFeed feed) {
         Instant occurredAt = instant(node);
         return new AlpacaMarketInput(
                 MarketEventType.BAR_1M,
                 "bar-" + BAR_EVENT_ID_FORMAT.format(occurredAt),
                 text(node, "S"),
-                FEED,
+                feed.eventValue(),
                 occurredAt,
                 receivedAt,
                 occurredAt.getEpochSecond() / 60,
