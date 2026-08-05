@@ -1,6 +1,6 @@
 create schema if not exists trading;
 
-create table trading.candidate_batch_processing (
+create table if not exists trading.candidate_batch_processing (
     batch_id uuid primary key,
     evaluation_id uuid not null,
     source_created_at timestamptz not null,
@@ -14,5 +14,5 @@ create table trading.candidate_batch_processing (
         check (status in ('PROCESSING', 'COMPLETED', 'FAILED'))
 );
 
-create index candidate_batch_processing_evaluation_idx
+create index if not exists candidate_batch_processing_evaluation_idx
     on trading.candidate_batch_processing (evaluation_id);
