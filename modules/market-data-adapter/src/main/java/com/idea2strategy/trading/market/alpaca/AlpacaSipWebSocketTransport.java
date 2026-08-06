@@ -34,9 +34,7 @@ public final class AlpacaSipWebSocketTransport implements AlpacaSipTransport {
         String symbolArray = universe.symbols().stream()
                 .map(AlpacaSipWebSocketTransport::quote)
                 .collect(Collectors.joining(",", "[", "]"));
-        sender.send("{\"action\":\"subscribe\",\"trades\":" + symbolArray
-                + ",\"quotes\":" + symbolArray
-                + ",\"bars\":" + symbolArray + "}");
+        sender.send("{\"action\":\"subscribe\",\"bars\":" + symbolArray + "}");
     }
 
     private static String quote(String value) {

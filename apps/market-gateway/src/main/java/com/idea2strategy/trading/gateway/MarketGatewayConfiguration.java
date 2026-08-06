@@ -42,15 +42,18 @@ public class MarketGatewayConfiguration {
     @Bean(destroyMethod = "close")
     RedisMarketEventPublisher marketEventPublisher(
             @Value("${market-gateway.redis-uri}") String redisUri,
-            @Value("${market-gateway.redis-key-prefix}") String keyPrefix) {
-        return RedisMarketEventPublisher.connect(redisUri, keyPrefix);
+            @Value("${market-gateway.redis-key-prefix}") String keyPrefix,
+            @Value("${market-gateway.recent-bar-capacity:390}") int recentBarCapacity) {
+        return RedisMarketEventPublisher.connect(redisUri, keyPrefix, recentBarCapacity);
     }
 
     @Bean
     ApprovedInstruments approvedInstruments(
             @Value("${market-gateway.instrument-mapping-path}") String mappingPath,
+            @Value("${market-gateway.minimum-instrument-count:1}") int minimumInstrumentCount,
             VerifiedGatewayMaterialization verified) {
-        return new ApprovedInstruments(FileInstrumentMapping.load(Path.of(mappingPath)));
+        return new ApprovedInstruments(
+                FileInstrumentMapping.load(Path.of(mappingPath)), minimumInstrumentCount);
     }
 
     @Bean

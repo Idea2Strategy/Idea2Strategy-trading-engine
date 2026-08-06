@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -43,6 +44,12 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
             type_error = assert_type(KEYS[3], 'set')
             if type_error ~= nil then
               return type_error
+            end
+            if ARGV[6] == 'BAR_1M' then
+              type_error = assert_type(KEYS[4], 'zset')
+              if type_error ~= nil then
+                return type_error
+              end
             end
 
             if redis.call('SADD', KEYS[3], ARGV[1]) == 0 then
@@ -91,6 +98,17 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
                   'streamEntryId', stream_id)
                 latest_updated = 1
               end
+            end
+
+            if ARGV[6] == 'BAR_1M' then
+              redis.call('ZREMRANGEBYSCORE', KEYS[4], ARGV[10], ARGV[10])
+              redis.call('ZADD', KEYS[4], ARGV[10], ARGV[16])
+              local bar_count = redis.call('ZCARD', KEYS[4])
+              local capacity = tonumber(ARGV[15])
+              if bar_count > capacity then
+                redis.call('ZREMRANGEBYRANK', KEYS[4], 0, bar_count - capacity - 1)
+              end
+              redis.call('PUBLISH', KEYS[5], ARGV[16])
             end
 
             return {1, stream_id, latest_updated}
@@ -184,28 +202,42 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
     private final RedisCommands<String, String> commands;
     private final ObjectMapper objectMapper;
     private final String keyBase;
+    private final int recentBarCapacity;
 
-    private RedisMarketEventPublisher(RedisClient client, String keyPrefix) {
+    private RedisMarketEventPublisher(RedisClient client, String keyPrefix, int recentBarCapacity) {
         this.client = Objects.requireNonNull(client, "client");
         this.connection = client.connect();
         this.commands = connection.sync();
         this.objectMapper = new ObjectMapper();
         this.keyBase = keyBase(keyPrefix);
+        this.recentBarCapacity = recentBarCapacity(recentBarCapacity);
     }
 
     RedisMarketEventPublisher(RedisCommands<String, String> commands, String keyPrefix) {
+        this(commands, keyPrefix, 390);
+    }
+
+    RedisMarketEventPublisher(
+            RedisCommands<String, String> commands, String keyPrefix, int recentBarCapacity) {
         this.client = null;
         this.connection = null;
         this.commands = Objects.requireNonNull(commands, "commands");
         this.objectMapper = new ObjectMapper();
         this.keyBase = keyBase(keyPrefix);
+        this.recentBarCapacity = recentBarCapacity(recentBarCapacity);
     }
 
     public static RedisMarketEventPublisher connect(String redisUri, String keyPrefix) {
+        return connect(redisUri, keyPrefix, 390);
+    }
+
+    public static RedisMarketEventPublisher connect(
+            String redisUri, String keyPrefix, int recentBarCapacity) {
         if (redisUri == null || redisUri.isBlank()) {
             throw new IllegalArgumentException("redisUri must not be blank");
         }
-        return new RedisMarketEventPublisher(RedisClient.create(redisUri), keyPrefix);
+        return new RedisMarketEventPublisher(
+                RedisClient.create(redisUri), keyPrefix, recentBarCapacity);
     }
 
     public MarketEventPublishResult publish(MarketEventHandlingResult handlingResult) {
@@ -220,7 +252,9 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
                 new String[] {
                     streamKey(),
                     latestKey(event.instrumentId(), event.eventType()),
-                    deduplicationKey()
+                    deduplicationKey(),
+                    recentBarsKey(event.instrumentId()),
+                    barUpdatesChannel()
                 },
                 event.eventId(),
                 Integer.toString(event.schemaVersion()),
@@ -235,7 +269,9 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
                 Integer.toString(event.revision()),
                 event.correctionOfEventId() == null ? "" : event.correctionOfEventId(),
                 serializeValues(event.values()),
-                handlingResult.shouldUpdateLatestValue() ? "1" : "0");
+                handlingResult.shouldUpdateLatestValue() ? "1" : "0",
+                Integer.toString(recentBarCapacity),
+                serializeBarUpdate(event));
 
         boolean published = number(result.get(0)) == 1;
         if (!published) {
@@ -324,6 +360,15 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         return keyBase + ":latest:" + instrumentId + ":" + eventType.name();
     }
 
+    public String recentBarsKey(UUID instrumentId) {
+        Objects.requireNonNull(instrumentId, "instrumentId");
+        return keyBase + ":bars:" + instrumentId + ":1m";
+    }
+
+    public String barUpdatesChannel() {
+        return keyBase + ":bar-updates";
+    }
+
     public String availabilityKey(UUID instrumentId) {
         Objects.requireNonNull(instrumentId, "instrumentId");
         return keyBase + ":availability:" + instrumentId;
@@ -360,6 +405,33 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException("market event values cannot be serialized", exception);
         }
+    }
+
+    private String serializeBarUpdate(MarketEventEnvelope event) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("schemaVersion", event.schemaVersion());
+        payload.put("eventId", event.eventId());
+        payload.put("instrumentId", event.instrumentId().toString());
+        payload.put("provider", event.provider());
+        payload.put("feed", event.feed());
+        payload.put("eventType", event.eventType().name());
+        payload.put("occurredAt", event.occurredAt().toString());
+        payload.put("receivedAt", event.receivedAt().toString());
+        payload.put("sequence", event.sequence());
+        payload.put("revision", event.revision());
+        payload.putAll(event.values());
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("market bar update cannot be serialized", exception);
+        }
+    }
+
+    private static int recentBarCapacity(int value) {
+        if (value < 1 || value > 10_000) {
+            throw new IllegalArgumentException("recentBarCapacity must be between 1 and 10000");
+        }
+        return value;
     }
 
     private static String keyBase(String keyPrefix) {

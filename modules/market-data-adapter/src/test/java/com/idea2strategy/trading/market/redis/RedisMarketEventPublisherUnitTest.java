@@ -81,12 +81,34 @@ class RedisMarketEventPublisherUnitTest {
         assertEquals(List.of(
                         "{unit-test:market}:events",
                         "{unit-test:market}:latest:" + AAPL_ID + ":QUOTE",
-                        "{unit-test:market}:seen"),
+                        "{unit-test:market}:seen",
+                        "{unit-test:market}:bars:" + AAPL_ID + ":1m",
+                        "{unit-test:market}:bar-updates"),
                 List.of(keys.getValue()));
         assertEquals(event.eventId(), arguments.getValue()[0]);
         assertEquals("42", arguments.getValue()[9]);
         assertEquals("0", arguments.getValue()[10]);
         assertEquals("1", arguments.getValue()[13]);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void retainsAndBroadcastsMinuteBarsForUserCharts() {
+        doReturn(List.of(1L, "1722510000000-0", 1L))
+                .when(commands)
+                .eval(anyString(), eq(ScriptOutputType.MULTI), any(String[].class), any(String[].class));
+        MarketEventEnvelope bar = minuteBar(42, "210.12");
+
+        publisher.publish(new MarketEventOrderingProcessor().process(bar));
+
+        ArgumentCaptor<String[]> keys = ArgumentCaptor.forClass(String[].class);
+        ArgumentCaptor<String[]> arguments = ArgumentCaptor.forClass(String[].class);
+        verify(commands).eval(anyString(), eq(ScriptOutputType.MULTI), keys.capture(), arguments.capture());
+        assertEquals("{unit-test:market}:bars:" + AAPL_ID + ":1m", keys.getValue()[3]);
+        assertEquals("{unit-test:market}:bar-updates", keys.getValue()[4]);
+        assertEquals("390", arguments.getValue()[14]);
+        assertEquals(true, arguments.getValue()[15].contains("\"instrumentId\":\"" + AAPL_ID + "\""));
+        assertEquals(true, arguments.getValue()[15].contains("\"close\":210.12"));
     }
 
     @Test
@@ -209,5 +231,24 @@ class RedisMarketEventPublisherUnitTest {
                 sequence,
                 revision,
                 Map.of("price", new BigDecimal(price))));
+    }
+
+    private static MarketEventEnvelope minuteBar(long sequence, String close) {
+        Instant occurredAt = Instant.parse("2026-08-01T14:30:00Z").plusSeconds(sequence * 60);
+        return NORMALIZER.normalize(new AlpacaMarketInput(
+                MarketEventType.BAR_1M,
+                "bar-" + sequence,
+                "AAPL",
+                "sip",
+                occurredAt,
+                occurredAt.plusMillis(10),
+                sequence,
+                0,
+                Map.of(
+                        "open", new BigDecimal("210.00"),
+                        "high", new BigDecimal("210.20"),
+                        "low", new BigDecimal("209.90"),
+                        "close", new BigDecimal(close),
+                        "volume", new BigDecimal("2500"))));
     }
 }
