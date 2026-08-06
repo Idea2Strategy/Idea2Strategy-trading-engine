@@ -22,8 +22,7 @@ class AlpacaSipWebSocketTransportTest {
         assertEquals(
                 List.of(
                         "{\"action\":\"auth\",\"key\":\"api-key\",\"secret\":\"api-secret\"}",
-                        "{\"action\":\"subscribe\",\"trades\":[\"AAPL\",\"MSFT\"],"
-                                + "\"quotes\":[\"AAPL\",\"MSFT\"],\"bars\":[\"AAPL\",\"MSFT\"]}"),
+                        "{\"action\":\"subscribe\",\"bars\":[\"AAPL\",\"MSFT\"]}"),
                 frames);
     }
 }
