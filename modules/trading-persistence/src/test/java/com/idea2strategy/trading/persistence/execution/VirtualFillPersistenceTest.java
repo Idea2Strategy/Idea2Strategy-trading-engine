@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.DockerClientFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
@@ -37,6 +38,9 @@ class VirtualFillPersistenceTest {
         String username = System.getenv().getOrDefault("F08_POSTGRES_USER", "postgres");
         String password = System.getenv().getOrDefault("F08_POSTGRES_PASSWORD", "postgres");
         if (externalUrl == null || externalUrl.isBlank()) {
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                    DockerClientFactory.instance().isDockerAvailable(),
+                    "PostgreSQL integration test requires F08_POSTGRES_URL or an available Docker daemon");
             postgres = new PostgreSQLContainer<>("postgres:17-alpine");
             postgres.start();
             externalUrl = postgres.getJdbcUrl();
