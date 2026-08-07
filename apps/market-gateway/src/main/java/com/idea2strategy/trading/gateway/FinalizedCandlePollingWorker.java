@@ -10,6 +10,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -27,6 +29,7 @@ final class FinalizedCandlePollingWorker {
     private final Duration grace;
     private final FinalizedCandleBoundaryPlanner planner = new FinalizedCandleBoundaryPlanner();
     private final Set<String> completed = new HashSet<>();
+    private final Map<String, Set<String>> pendingSymbols = new LinkedHashMap<>();
 
     FinalizedCandlePollingWorker(
             FinalizedCandleCycle cycle,
@@ -45,6 +48,9 @@ final class FinalizedCandlePollingWorker {
     public void poll() {
         Instant now = clock.instant();
         LocalDate tradingDate = now.atZone(OfficialMarketSessionEvaluator.NEW_YORK).toLocalDate();
+        String currentDatePrefix = tradingDate + ":";
+        completed.removeIf(key -> !key.startsWith(currentDatePrefix));
+        pendingSymbols.keySet().removeIf(key -> !key.startsWith(currentDatePrefix));
         OfficialMarketSession session = sessions.session(tradingDate).orElse(null);
         if (session == null) {
             return;
@@ -55,8 +61,14 @@ final class FinalizedCandlePollingWorker {
                 continue;
             }
             try {
-                var result = cycle.run(instruments.bySymbol(), session, boundary);
-                completed.add(key);
+                Map<String, java.util.UUID> requested = requestedInstruments(key);
+                var result = cycle.run(requested, session, boundary);
+                if (result.missingSymbols().isEmpty()) {
+                    pendingSymbols.remove(key);
+                    completed.add(key);
+                } else {
+                    pendingSymbols.put(key, result.missingSymbols());
+                }
                 log.info("finalized 30m boundary {}: evaluated={}, missing={}",
                         boundary, result.evaluatedInstrumentCount(), result.missingInstrumentCount());
             } catch (RuntimeException failure) {
@@ -64,5 +76,20 @@ final class FinalizedCandlePollingWorker {
                 return;
             }
         }
+    }
+
+    private Map<String, java.util.UUID> requestedInstruments(String boundaryKey) {
+        Set<String> pending = pendingSymbols.get(boundaryKey);
+        if (pending == null) {
+            return instruments.bySymbol();
+        }
+        Map<String, java.util.UUID> requested = new LinkedHashMap<>();
+        pending.forEach(symbol -> {
+            java.util.UUID instrumentId = instruments.bySymbol().get(symbol);
+            if (instrumentId != null) {
+                requested.put(symbol, instrumentId);
+            }
+        });
+        return Map.copyOf(requested);
     }
 }

@@ -99,7 +99,24 @@ class RedisMarketEventPublisherTest {
                     RedisCommandExecutionException.class,
                     () -> publisher.publish(new MarketEventOrderingProcessor().process(event)));
             assertEquals(0, publisher.streamLength());
-            assertEquals(0, connection.sync().scard(publisher.deduplicationKey()));
+            assertEquals(0, connection.sync().zcard(publisher.deduplicationKey()));
+        }
+    }
+
+    @Test
+    void boundsTheEventStreamAndExpiresOldDeduplicationIds() {
+        String prefix = prefix();
+        try (RedisClient client = RedisClient.create(redisUri());
+                var connection = client.connect();
+                RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(
+                        redisUri(), prefix, 390, 2, Duration.ofSeconds(1))) {
+            MarketEventOrderingProcessor ordering = new MarketEventOrderingProcessor();
+            publisher.publish(ordering.process(event("quote-41", 41, 0, "210.10")));
+            publisher.publish(ordering.process(event("quote-42", 42, 0, "210.12")));
+            publisher.publish(ordering.process(event("quote-43", 43, 0, "210.13")));
+
+            assertEquals(2, publisher.streamLength());
+            assertEquals(1, connection.sync().zcard(publisher.deduplicationKey()));
         }
     }
 

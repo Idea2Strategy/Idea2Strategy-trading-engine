@@ -83,11 +83,12 @@ class StrategyBotManifestStartupE2ETest {
         String datasetHash = datasetHash(marketObject);
 
         List<Map<String, Object>> observations = new ArrayList<>();
-        for (int minute = 0; minute < 14; minute++) {
+        Instant firstObservation = Instant.parse("2026-07-31T07:00:00Z");
+        for (int bar = 0; bar < 14; bar++) {
             observations.add(Map.of(
                     "instrument", INSTRUMENT_ID,
-                    "observed_at", "2026-07-31T14:%02d:00Z".formatted(minute),
-                    "value", Integer.toString(200 + minute)));
+                    "observed_at", firstObservation.plusSeconds(1_800L * bar).toString(),
+                    "value", Integer.toString(200 + bar)));
         }
         Map<String, Object> feature = new LinkedHashMap<>();
         feature.put("contract_id", "d90.warmup-features");
@@ -96,10 +97,10 @@ class StrategyBotManifestStartupE2ETest {
         feature.put("manifest_id", MANIFEST_ID);
         feature.put("dataset_hash", datasetHash);
         feature.put("series", List.of(Map.of(
-                "requirement_id", "rsi-14-pt1m",
+                "requirement_id", "rsi-14-pt30m",
                 "feature_id", FEATURE_ID,
                 "feature_version", "1.0.0",
-                "resolution", "PT1M",
+                "resolution", "PT30M",
                 "manifest_id", MANIFEST_ID,
                 "dataset_hash", datasetHash,
                 "observations", observations)));
@@ -169,17 +170,17 @@ class StrategyBotManifestStartupE2ETest {
                 {"contractVersion":"strategy-bot.v1","schemaVersion":"basic-compiled-plan.v1",
                 "elementCatalogVersion":"basic-elements:2026-07-31",
                 "instrumentCatalogVersion":"us-supported-universe:2026-07-31","compilerVersion":"basic-compiler:1.0.0",
-                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt1m",
+                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt30m",
                 "featureId":"%s","featureVersion":"1.0.0","instruments":["%s"],
-                "resolution":"PT1M","requiredObservations":14}],"executionSnapshot":{"immutableStrategyVersion":{
+                "resolution":"PT30M","requiredObservations":14}],"executionSnapshot":{"immutableStrategyVersion":{
                 "snapshotSchemaVersion":"basic-launch-snapshot.v1","semanticHash":"sha256:%s",
                 "snapshotHash":"sha256:%s"},"mode":"BASIC","initialCashAmount":"100000.00000000","currency":"USD",
                 "partitions":[{"key":"partition-1","budgetCapBps":10000,"flows":[{"key":"flow-1",
                 "officialInstrumentIds":["%s"]}]}]},"steps":[{"sequence":1,"operation":"LOAD_FEATURE",
-                "arguments":{"feature":"RSI_14","resolution":"1m"}},{"sequence":2,"operation":"COMPARE",
+                "arguments":{"feature":"RSI_14","resolution":"30m"}},{"sequence":2,"operation":"COMPARE",
                 "arguments":{"operator":"LT","threshold":"30"}},{"sequence":3,"operation":"EMIT_ORDER_CANDIDATE",
                 "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],
-                "planChecksum":"sha256:88d61198d46dce161c2a929702a7fd1cee5c9b044c470d2590b96f3825fcacb3"}
+                "planChecksum":"sha256:fdf0a80a912feeae259871be03c887dcddbba9931426c371f2dc604e8b6496d9"}
                 """.formatted("3".repeat(64), FEATURE_ID, INSTRUMENT_ID, "2".repeat(64), "1".repeat(64), INSTRUMENT_ID);
     }
 

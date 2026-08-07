@@ -4,19 +4,22 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
+import java.util.Set;
 
 class StrategyEvaluationTimeframeTest {
     @Test
-    void resolvesSupportedCadencesAndMigratesLockedOneMinutePlansToThirtyMinutes() {
-        assertEquals(StrategyEvaluationTimeframe.FOUR_HOURS,
+    void resolvesEverySupportedCadenceIncludingMixedPlans() {
+        assertEquals(Set.of(StrategyEvaluationTimeframe.FOUR_HOURS),
                 StrategyEvaluationTimeframe.fromPlan("{\"resolution\":\"4h\"}"));
-        assertEquals(StrategyEvaluationTimeframe.THIRTY_MINUTES,
-                StrategyEvaluationTimeframe.fromPlan("{\"resolution\":\"PT1M\"}"));
+        assertEquals(
+                Set.of(StrategyEvaluationTimeframe.THIRTY_MINUTES, StrategyEvaluationTimeframe.ONE_HOUR),
+                StrategyEvaluationTimeframe.fromPlan(
+                        "{\"steps\":[{\"resolution\":\"30m\"},{\"resolution\":\"1h\"}]}"));
     }
 
     @Test
-    void rejectsMixedCadencesBecauseOneFeatureStateCannotRepresentBoth() {
-        assertThrows(IllegalArgumentException.class, () -> StrategyEvaluationTimeframe.fromPlan(
-                "{\"steps\":[{\"resolution\":\"30m\"},{\"resolution\":\"1h\"}]}"));
+    void rejectsDisplayOnlyOneMinuteCadence() {
+        assertThrows(IllegalArgumentException.class,
+                () -> StrategyEvaluationTimeframe.fromPlan("{\"resolution\":\"PT1M\"}"));
     }
 }

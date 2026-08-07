@@ -11,6 +11,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.LinkedHashSet;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -48,7 +50,7 @@ public final class FinalizedCandleCycle {
         validateBoundary(session, boundary);
         List<Map.Entry<String, UUID>> entries = new ArrayList<>(instruments.entrySet());
         int evaluated = 0;
-        int missing = 0;
+        Set<String> missing = new LinkedHashSet<>();
         for (int offset = 0; offset < entries.size(); offset += batchSize) {
             Map<String, UUID> batch = new LinkedHashMap<>();
             entries.subList(offset, Math.min(entries.size(), offset + batchSize))
@@ -57,14 +59,14 @@ public final class FinalizedCandleCycle {
             for (Map.Entry<String, UUID> instrument : batch.entrySet()) {
                 List<MarketCandle> source = fetched.getOrDefault(instrument.getKey(), List.of());
                 if (source.isEmpty() || !source.getLast().closesAt().equals(boundary)) {
-                    missing++;
+                    missing.add(instrument.getKey());
                     continue;
                 }
                 List<MarketCandle> closed;
                 try {
                     closed = aggregator.closedAt(source, session, boundary);
                 } catch (IllegalArgumentException missingSource) {
-                    missing++;
+                    missing.add(instrument.getKey());
                     continue;
                 }
                 Instant receivedAt = clock.instant();
@@ -84,5 +86,18 @@ public final class FinalizedCandleCycle {
         }
     }
 
-    public record FinalizedCandleCycleResult(int evaluatedInstrumentCount, int missingInstrumentCount) {}
+    public record FinalizedCandleCycleResult(
+            int evaluatedInstrumentCount,
+            Set<String> missingSymbols) {
+        public FinalizedCandleCycleResult {
+            if (evaluatedInstrumentCount < 0) {
+                throw new IllegalArgumentException("evaluatedInstrumentCount must not be negative");
+            }
+            missingSymbols = Set.copyOf(Objects.requireNonNull(missingSymbols, "missingSymbols"));
+        }
+
+        public int missingInstrumentCount() {
+            return missingSymbols.size();
+        }
+    }
 }

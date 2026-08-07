@@ -83,14 +83,7 @@ final class BasicMarketSignalState {
             }
         }
         series.forEach((resolution, item) -> item.publish(values));
-        publishLegacyOneMinuteAlias(values);
         return Map.copyOf(values);
-    }
-
-    private void publishLegacyOneMinuteAlias(Map<String, String> values) {
-        Series thirtyMinute = series.get("30m");
-        values.put("bar.closed.1m", values.get("bar.closed.30m"));
-        thirtyMinute.publish(values, "1m");
     }
 
     private static boolean flag(Map<String, BigDecimal> values, String key) {

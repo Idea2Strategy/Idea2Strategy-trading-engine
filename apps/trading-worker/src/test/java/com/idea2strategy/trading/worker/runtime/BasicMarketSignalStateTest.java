@@ -16,7 +16,7 @@ class BasicMarketSignalStateTest {
     private static final UUID INSTRUMENT = UUID.fromString("00000000-0000-4000-8000-000000000301");
 
     @Test
-    void publishesOnlyFinalizedStrategyCandlesAndKeepsLegacyOneMinutePlansOnThirtyMinuteCadence() {
+    void publishesOnlyFinalizedStrategyCandles() {
         BasicMarketSignalState state = new BasicMarketSignalState();
 
         Map<String, String> first = state.accept(ready(
@@ -29,8 +29,8 @@ class BasicMarketSignalStateTest {
         assertEquals("true", first.get("bar.closed.30m"));
         assertEquals("false", first.get("bar.closed.1h"));
         assertEquals("true", second.get("bar.closed.1h"));
-        assertEquals("100,101", second.get("closes.1m"));
-        assertEquals("true", first.get("bar.closed.1m"));
+        assertNull(second.get("closes.1m"));
+        assertNull(first.get("bar.closed.1m"));
         assertNull(second.get("bar.closed.5m"));
     }
 

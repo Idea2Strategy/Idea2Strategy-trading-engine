@@ -3,6 +3,14 @@ plugins {
     id("org.springframework.boot")
 }
 
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStandardStreams = true
+    }
+}
+
 abstract class VerifyNoFlywayRuntime : DefaultTask() {
     @get:Classpath
     abstract val flywayArtifacts: ConfigurableFileCollection

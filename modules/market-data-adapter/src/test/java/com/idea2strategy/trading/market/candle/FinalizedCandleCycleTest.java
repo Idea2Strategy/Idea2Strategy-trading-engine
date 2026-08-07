@@ -46,6 +46,7 @@ class FinalizedCandleCycleTest {
 
         assertEquals(1, result.evaluatedInstrumentCount());
         assertEquals(1, result.missingInstrumentCount());
+        assertEquals(java.util.Set.of("MSFT"), result.missingSymbols());
         assertEquals(
                 List.of(MarketEventType.BAR_30M, MarketEventType.BAR_1H, MarketEventType.MARKET_EVALUATION_READY),
                 events.stream().map(MarketEventEnvelope::eventType).toList());
