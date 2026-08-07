@@ -33,6 +33,9 @@ import com.idea2strategy.trading.worker.candidate.OrderCandidateBatchAdapter;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -82,6 +85,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
     private final OrderCandidateBatchAdapter adapter;
     private final BotScopeResolver scopeResolver;
     private final EvaluationRunRecorder runRecorder;
+    private final PositionMetricSource positionMetricSource;
     private final BasicPlanInterpreter interpreter = new BasicPlanInterpreter();
     private final BasicStrategyExecutor executor = new BasicStrategyExecutor();
     private final BasicCandidateConverger converger = new BasicCandidateConverger();
@@ -92,10 +96,20 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             OrderCandidateBatchAdapter adapter,
             BotScopeResolver scopeResolver,
             EvaluationRunRecorder runRecorder) {
+        this(processor, adapter, scopeResolver, runRecorder, PositionMetricSource.none());
+    }
+
+    public EvaluatingBotRuntime(
+            CandidateBatchProcessor processor,
+            OrderCandidateBatchAdapter adapter,
+            BotScopeResolver scopeResolver,
+            EvaluationRunRecorder runRecorder,
+            PositionMetricSource positionMetricSource) {
         this.processor = Objects.requireNonNull(processor, "processor");
         this.adapter = Objects.requireNonNull(adapter, "adapter");
         this.scopeResolver = Objects.requireNonNull(scopeResolver, "scopeResolver");
         this.runRecorder = Objects.requireNonNull(runRecorder, "runRecorder");
+        this.positionMetricSource = Objects.requireNonNull(positionMetricSource, "positionMetricSource");
     }
 
     @Override
@@ -175,10 +189,12 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             IncrementalFeatureSnapshot snapshot = bot.features().process(new RuntimeTrigger(
                     bot.botId(), bot.nextLocalSequence(), event.eventId(), RuntimeTriggerType.MARKET,
                     event.occurredAt(), Map.of(CLOSE, price)));
+            Map<String, String> marketValues = bot.signalState(event.instrumentId()).accept(event);
 
             UUID evaluationId = derived("evaluation", bot.botId() + ":" + event.eventId());
             BasicExecutionResult execution = executor.execute(new BasicExecutionRequest(
-                    evaluationId, bot.plan().flows(), inputsFor(bot, event, snapshot, price)));
+                    evaluationId, bot.plan().flows(),
+                    inputsFor(bot, event, snapshot, price, marketValues)));
             BasicCandidateConvergenceResult converged =
                     converger.converge(evaluationId, acceptedOf(execution, evaluationId));
             if (converged.acceptedCandidates().isEmpty()) {
@@ -217,14 +233,19 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             RegisteredBot bot,
             MarketEventEnvelope event,
             IncrementalFeatureSnapshot snapshot,
-            BigDecimal price) {
-        Map<String, String> values = new LinkedHashMap<>();
+            BigDecimal price,
+            Map<String, String> marketValues) {
+        Map<String, String> values = new LinkedHashMap<>(marketValues);
         values.put("price", price.toPlainString());
         IncrementalFeatureState state = snapshot.featureStates().get(bot.calculator().key());
         if (state != null) {
             bot.calculator().valueOf(state).ifPresent(value ->
                     values.put(bot.calculator().feature().featureId(), value.toPlainString()));
         }
+        positionMetricSource.resolve(bot.botId(), event.instrumentId()).ifPresentOrElse(
+                position -> bot.positionTracker(event.instrumentId(), position)
+                        .publish(values, position, price, event.occurredAt(), marketValues),
+                () -> bot.clearPositionTracker(event.instrumentId()));
 
         Map<UUID, BasicInstrumentInput> inputs = new LinkedHashMap<>();
         for (UUID instrumentId : bot.plan().subscribedInstruments()) {
@@ -343,6 +364,8 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         private final OrderedIncrementalFeatureRuntime features;
         private final BoundedWindowFeatureCalculator calculator;
         private final EvaluationWindow window;
+        private final Map<UUID, BasicMarketSignalState> signalStates = new LinkedHashMap<>();
+        private final Map<UUID, PositionTracker> positionTrackers = new LinkedHashMap<>();
 
         /** The gateway's stream position, which starts wherever the bot joined. */
         private long lastMarketSequence = Long.MIN_VALUE;
@@ -399,6 +422,85 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         private EvaluationWindow window() {
             return window;
         }
+
+        private BasicMarketSignalState signalState(UUID instrumentId) {
+            return signalStates.computeIfAbsent(instrumentId, ignored -> new BasicMarketSignalState());
+        }
+
+        private PositionTracker positionTracker(UUID instrumentId, PositionSnapshot snapshot) {
+            return positionTrackers.compute(instrumentId, (ignored, current) ->
+                    current != null && current.matches(snapshot) ? current : new PositionTracker(snapshot));
+        }
+
+        private void clearPositionTracker(UUID instrumentId) {
+            positionTrackers.remove(instrumentId);
+        }
+    }
+
+    private static final class PositionTracker {
+        private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
+        private final BigDecimal averageEntryPrice;
+        private final Instant openedAt;
+        private BigDecimal peakPrice;
+        private final Map<String, Long> closedBars = new LinkedHashMap<>();
+
+        private PositionTracker(PositionSnapshot snapshot) {
+            this.averageEntryPrice = snapshot.averageEntryPrice();
+            this.openedAt = snapshot.openedAt();
+            this.peakPrice = averageEntryPrice;
+        }
+
+        private boolean matches(PositionSnapshot snapshot) {
+            return averageEntryPrice.compareTo(snapshot.averageEntryPrice()) == 0
+                    && openedAt.equals(snapshot.openedAt());
+        }
+
+        private void publish(
+                Map<String, String> values,
+                PositionSnapshot snapshot,
+                BigDecimal price,
+                Instant occurredAt,
+                Map<String, String> marketValues) {
+            peakPrice = peakPrice.max(price);
+            BigDecimal currentReturn = percentage(price.subtract(averageEntryPrice), averageEntryPrice);
+            BigDecimal peakReturn = percentage(peakPrice.subtract(averageEntryPrice), averageEntryPrice);
+            BigDecimal drawdown = percentage(peakPrice.subtract(price), peakPrice);
+            values.put("position.averageEntryPrice", averageEntryPrice.toPlainString());
+            values.put("position.returnPercent", currentReturn.toPlainString());
+            values.put("position.peakReturnPercent", peakReturn.toPlainString());
+            values.put("position.drawdownPercent", drawdown.toPlainString());
+            for (String resolution : List.of("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w")) {
+                if (Boolean.parseBoolean(marketValues.getOrDefault("bar.closed." + resolution, "false"))) {
+                    closedBars.merge(resolution, 1L, Long::sum);
+                }
+                values.put("position.holdingBars." + resolution,
+                        Long.toString(closedBars.getOrDefault(resolution, 0L)));
+            }
+            LocalDate opened = openedAt.atZone(MARKET_ZONE).toLocalDate();
+            LocalDate current = occurredAt.atZone(MARKET_ZONE).toLocalDate();
+            values.put("position.holdingTradingDays",
+                    Long.toString(tradingWeekdaysBetween(opened, current)));
+        }
+
+        private static BigDecimal percentage(BigDecimal numerator, BigDecimal denominator) {
+            if (denominator.signum() == 0) {
+                return BigDecimal.ZERO;
+            }
+            return numerator.multiply(BigDecimal.valueOf(100))
+                    .divide(denominator, 8, java.math.RoundingMode.HALF_UP);
+        }
+
+        private static long tradingWeekdaysBetween(LocalDate start, LocalDate end) {
+            long count = 0;
+            for (long day = 0; day <= Math.max(0, ChronoUnit.DAYS.between(start, end)); day++) {
+                java.time.DayOfWeek weekday = start.plusDays(day).getDayOfWeek();
+                if (weekday != java.time.DayOfWeek.SATURDAY
+                        && weekday != java.time.DayOfWeek.SUNDAY) {
+                    count++;
+                }
+            }
+            return Math.max(0, count - 1);
+        }
     }
 
     /** The canonical ids of one flow, which a candidate batch cannot be written without. */
@@ -428,5 +530,24 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
     public interface EvaluationRunRecorder {
         UUID recordEvaluationRun(
                 UUID botId, BotScope scope, UUID evaluationId, MarketEventEnvelope event);
+    }
+
+    /** Reads the durable current position used by position-dependent sell blocks. */
+    public interface PositionMetricSource {
+        Optional<PositionSnapshot> resolve(UUID botId, UUID instrumentId);
+
+        static PositionMetricSource none() {
+            return (botId, instrumentId) -> Optional.empty();
+        }
+    }
+
+    public record PositionSnapshot(BigDecimal averageEntryPrice, Instant openedAt) {
+        public PositionSnapshot {
+            Objects.requireNonNull(averageEntryPrice, "averageEntryPrice");
+            Objects.requireNonNull(openedAt, "openedAt");
+            if (averageEntryPrice.signum() <= 0) {
+                throw new IllegalArgumentException("averageEntryPrice must be positive");
+            }
+        }
     }
 }

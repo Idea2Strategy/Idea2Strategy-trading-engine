@@ -17,9 +17,6 @@ public record WarmupRequest(
         releaseId = Objects.requireNonNull(releaseId, "releaseId");
         startupTime = Objects.requireNonNull(startupTime, "startupTime");
         requirements = Set.copyOf(Objects.requireNonNull(requirements, "requirements"));
-        if (requirements.isEmpty()) {
-            throw new IllegalArgumentException("requirements must not be empty");
-        }
         Set<String> ids = new HashSet<>();
         if (requirements.stream().anyMatch(requirement -> !ids.add(requirement.requirementId()))) {
             throw new IllegalArgumentException("requirementId must be unique");

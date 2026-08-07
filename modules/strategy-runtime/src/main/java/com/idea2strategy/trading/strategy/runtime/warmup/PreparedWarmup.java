@@ -19,4 +19,10 @@ public record PreparedWarmup(
         datasetHash = WarmupValueValidation.requireSha256(datasetHash, "datasetHash");
         seriesByRequirementId = Map.copyOf(Objects.requireNonNull(seriesByRequirementId, "seriesByRequirementId"));
     }
+
+    /** A direct-operation plan needs rolling live bars, but no catalog feature snapshot. */
+    public static PreparedWarmup none() {
+        return new PreparedWarmup(
+                "none", "none", 1, "0".repeat(64), Map.of());
+    }
 }

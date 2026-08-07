@@ -154,6 +154,21 @@ class EvaluationLoopE2ETest {
                         "select count(*) from trading.resource_reservations where bot_id = ?", BOT)));
     }
 
+    @Test
+    void aDirectPriceBlockTradesFromCompletedMarketBarsWithoutRsi() {
+        runtime.start(directPricePlan(), PreparedWarmup.none(),
+                EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
+
+        List<CandidateBatchProcessingResult> first = runtime.feed(event(1, "100"));
+        List<CandidateBatchProcessingResult> crossed = runtime.feed(event(2, "101"));
+
+        assertAll(
+                () -> assertTrue(first.isEmpty(), "the previous close is not available yet"),
+                () -> assertEquals(List.of(CandidateBatchProcessingResult.PROCESSED), crossed),
+                () -> assertEquals(1, count(
+                        "select count(*) from trading.order_intents where bot_id = ?", BOT)));
+    }
+
     /**
      * A repeat or a late arrival leaves canonical exactly as it was.
      *
@@ -338,6 +353,12 @@ class EvaluationLoopE2ETest {
                 "strategy-bot-runtime.v1", 0, Map.of());
     }
 
+    private LoadedExecutionPlan directPricePlan() {
+        return new LoadedExecutionPlan(
+                BOT, RELEASE, "basic-compiled-plan.v1", Set.of(), directPricePlanDocument(),
+                "strategy-bot-runtime.v1", 0, Map.of());
+    }
+
     private EvaluatingBotRuntime freshRuntime() {
         return new EvaluatingBotRuntime(processor, adapter, scopeResolver, runRecorder);
     }
@@ -394,6 +415,27 @@ class EvaluationLoopE2ETest {
                 "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],
                 "planChecksum":"sha256:%s"}
                 """.formatted("3".repeat(64), INSTRUMENT, "2".repeat(64), "1".repeat(64),
+                        FLOW_KEY, INSTRUMENT, "4".repeat(64));
+    }
+
+    private static String directPricePlanDocument() {
+        return """
+                {"contractVersion":"strategy-bot.v1","schemaVersion":"basic-compiled-plan.v1",
+                "elementCatalogVersion":"basic-elements:2026-08-07",
+                "instrumentCatalogVersion":"us-supported-universe:2026-08-07",
+                "compilerVersion":"basic-compiler:1.0.0",
+                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[],
+                "executionSnapshot":{"immutableStrategyVersion":{
+                "snapshotSchemaVersion":"basic-launch-snapshot.v1","semanticHash":"sha256:%s",
+                "snapshotHash":"sha256:%s"},"mode":"BASIC","initialCashAmount":"100000.00000000",
+                "currency":"USD","partitions":[{"key":"partition-1","budgetCapBps":10000,
+                "flows":[{"key":"%s","officialInstrumentIds":["%s"]}]}]},
+                "steps":[{"sequence":1,"operation":"PRICE_COMPARE",
+                "arguments":{"resolution":"1m","operator":"GT","reference":"PREVIOUS_CLOSE"}},
+                {"sequence":2,"operation":"EMIT_ORDER_CANDIDATE",
+                "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],
+                "planChecksum":"sha256:%s"}
+                """.formatted("3".repeat(64), "2".repeat(64), "1".repeat(64),
                         FLOW_KEY, INSTRUMENT, "4".repeat(64));
     }
 

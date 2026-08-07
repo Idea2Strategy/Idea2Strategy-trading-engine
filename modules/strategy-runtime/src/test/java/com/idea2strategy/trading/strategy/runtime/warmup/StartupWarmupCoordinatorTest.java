@@ -195,4 +195,21 @@ class StartupWarmupCoordinatorTest {
                 () -> coordinator(value -> Optional.of(snapshot(seriesByRequirement))).prepare(request(requirement)));
         assertEquals(expected, exception.failure());
     }
+
+    @Test
+    void skipsTheManifestSourceWhenAPlanUsesOnlyDirectOperations() {
+        java.util.concurrent.atomic.AtomicBoolean called = new java.util.concurrent.atomic.AtomicBoolean();
+        StartupWarmupCoordinator coordinator = new StartupWarmupCoordinator(request -> {
+            called.set(true);
+            return java.util.Optional.empty();
+        }, "dataset-manifest-v1", "feature-object-v1");
+
+        PreparedWarmup prepared = coordinator.prepare(
+                new WarmupRequest(BOT_ID, RELEASE_ID, STARTUP_TIME, Set.of()));
+
+        org.junit.jupiter.api.Assertions.assertAll(
+                () -> org.junit.jupiter.api.Assertions.assertFalse(called.get()),
+                () -> org.junit.jupiter.api.Assertions.assertTrue(
+                        prepared.seriesByRequirementId().isEmpty()));
+    }
 }
