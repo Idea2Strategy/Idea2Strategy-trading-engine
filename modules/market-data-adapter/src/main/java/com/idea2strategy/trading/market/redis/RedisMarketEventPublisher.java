@@ -41,18 +41,19 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
             if type_error ~= nil then
               return type_error
             end
-            type_error = assert_type(KEYS[3], 'set')
+            type_error = assert_type(KEYS[3], 'zset')
             if type_error ~= nil then
               return type_error
             end
-            if ARGV[6] == 'BAR_1M' then
+            if string.sub(ARGV[6], 1, 4) == 'BAR_' then
               type_error = assert_type(KEYS[4], 'zset')
               if type_error ~= nil then
                 return type_error
               end
             end
 
-            if redis.call('SADD', KEYS[3], ARGV[1]) == 0 then
+            redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', ARGV[18])
+            if redis.call('ZADD', KEYS[3], 'NX', ARGV[17], ARGV[1]) == 0 then
               return {0, '', 0}
             end
 
@@ -71,6 +72,7 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
               'revision', ARGV[11],
               'correctionOfEventId', ARGV[12],
               'values', ARGV[13])
+            redis.call('XTRIM', KEYS[1], 'MAXLEN', '=', tonumber(ARGV[19]))
 
             local latest_updated = 0
             if ARGV[14] == '1' then
@@ -100,7 +102,7 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
               end
             end
 
-            if ARGV[6] == 'BAR_1M' then
+            if string.sub(ARGV[6], 1, 4) == 'BAR_' then
               redis.call('ZREMRANGEBYSCORE', KEYS[4], ARGV[10], ARGV[10])
               redis.call('ZADD', KEYS[4], ARGV[10], ARGV[16])
               local bar_count = redis.call('ZCARD', KEYS[4])
@@ -108,7 +110,6 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
               if bar_count > capacity then
                 redis.call('ZREMRANGEBYRANK', KEYS[4], 0, bar_count - capacity - 1)
               end
-              redis.call('PUBLISH', KEYS[5], ARGV[16])
             end
 
             return {1, stream_id, latest_updated}
@@ -203,28 +204,48 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
     private final ObjectMapper objectMapper;
     private final String keyBase;
     private final int recentBarCapacity;
+    private final int eventStreamCapacity;
+    private final Duration deduplicationRetention;
 
-    private RedisMarketEventPublisher(RedisClient client, String keyPrefix, int recentBarCapacity) {
+    private RedisMarketEventPublisher(
+            RedisClient client,
+            String keyPrefix,
+            int recentBarCapacity,
+            int eventStreamCapacity,
+            Duration deduplicationRetention) {
         this.client = Objects.requireNonNull(client, "client");
         this.connection = client.connect();
         this.commands = connection.sync();
         this.objectMapper = new ObjectMapper();
         this.keyBase = keyBase(keyPrefix);
         this.recentBarCapacity = recentBarCapacity(recentBarCapacity);
+        this.eventStreamCapacity = positive(eventStreamCapacity, "eventStreamCapacity");
+        this.deduplicationRetention = positive(deduplicationRetention, "deduplicationRetention");
     }
 
     RedisMarketEventPublisher(RedisCommands<String, String> commands, String keyPrefix) {
-        this(commands, keyPrefix, 390);
+        this(commands, keyPrefix, 390, 1_000_000, Duration.ofDays(30));
     }
 
     RedisMarketEventPublisher(
             RedisCommands<String, String> commands, String keyPrefix, int recentBarCapacity) {
+        this(commands, keyPrefix, recentBarCapacity, 1_000_000, Duration.ofDays(30));
+    }
+
+    RedisMarketEventPublisher(
+            RedisCommands<String, String> commands,
+            String keyPrefix,
+            int recentBarCapacity,
+            int eventStreamCapacity,
+            Duration deduplicationRetention) {
         this.client = null;
         this.connection = null;
         this.commands = Objects.requireNonNull(commands, "commands");
         this.objectMapper = new ObjectMapper();
         this.keyBase = keyBase(keyPrefix);
         this.recentBarCapacity = recentBarCapacity(recentBarCapacity);
+        this.eventStreamCapacity = positive(eventStreamCapacity, "eventStreamCapacity");
+        this.deduplicationRetention = positive(deduplicationRetention, "deduplicationRetention");
     }
 
     public static RedisMarketEventPublisher connect(String redisUri, String keyPrefix) {
@@ -233,11 +254,21 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
 
     public static RedisMarketEventPublisher connect(
             String redisUri, String keyPrefix, int recentBarCapacity) {
+        return connect(redisUri, keyPrefix, recentBarCapacity, 1_000_000, Duration.ofDays(30));
+    }
+
+    public static RedisMarketEventPublisher connect(
+            String redisUri,
+            String keyPrefix,
+            int recentBarCapacity,
+            int eventStreamCapacity,
+            Duration deduplicationRetention) {
         if (redisUri == null || redisUri.isBlank()) {
             throw new IllegalArgumentException("redisUri must not be blank");
         }
         return new RedisMarketEventPublisher(
-                RedisClient.create(redisUri), keyPrefix, recentBarCapacity);
+                RedisClient.create(redisUri), keyPrefix, recentBarCapacity,
+                eventStreamCapacity, deduplicationRetention);
     }
 
     public MarketEventPublishResult publish(MarketEventHandlingResult handlingResult) {
@@ -247,14 +278,14 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         }
 
         MarketEventEnvelope event = handlingResult.event();
+        long receivedAtEpochMillis = event.receivedAt().toEpochMilli();
         List<Object> result = evalList(
                 PUBLISH_SCRIPT,
                 new String[] {
-                    streamKey(),
+                    streamKey(event.eventType()),
                     latestKey(event.instrumentId(), event.eventType()),
                     deduplicationKey(),
-                    recentBarsKey(event.instrumentId()),
-                    barUpdatesChannel()
+                    recentBarsKey(event.instrumentId(), event.eventType())
                 },
                 event.eventId(),
                 Integer.toString(event.schemaVersion()),
@@ -271,7 +302,10 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
                 serializeValues(event.values()),
                 handlingResult.shouldUpdateLatestValue() ? "1" : "0",
                 Integer.toString(recentBarCapacity),
-                serializeBarUpdate(event));
+                serializeBarUpdate(event),
+                Long.toString(receivedAtEpochMillis),
+                Long.toString(receivedAtEpochMillis - deduplicationRetention.toMillis()),
+                Integer.toString(eventStreamCapacity));
 
         boolean published = number(result.get(0)) == 1;
         if (!published) {
@@ -292,7 +326,7 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
     }
 
     public long streamLength() {
-        return commands.xlen(streamKey());
+        return commands.xlen(evaluationStreamKey());
     }
 
     /** Publishes the gateway's C09 result; older or duplicate observations cannot overwrite it. */
@@ -329,7 +363,7 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         if (consumerGroup == null || consumerGroup.isBlank()) {
             throw new IllegalArgumentException("consumerGroup must not be blank");
         }
-        List<Object> result = evalList(LAG_SCRIPT, new String[] {streamKey()}, consumerGroup);
+        List<Object> result = evalList(LAG_SCRIPT, new String[] {evaluationStreamKey()}, consumerGroup);
         long entryLag = number(result.get(0));
         String lastDeliveredId = result.get(1).toString();
         String deliveredOccurredAt = result.get(2).toString();
@@ -346,12 +380,29 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         return new ConsumerLagMeasurement(entryLag, observationLag, lastDeliveredId);
     }
 
+    public String evaluationStreamKey() {
+        return keyBase + ":strategy:evaluation-ready:v1";
+    }
+
+    /** The worker-facing stream is now evaluation-only. */
     public String streamKey() {
-        return keyBase + ":events";
+        return evaluationStreamKey();
+    }
+
+    public String candleStreamKey() {
+        return keyBase + ":strategy:candles:v1";
+    }
+
+    private String streamKey(MarketEventType eventType) {
+        return switch (eventType) {
+            case MARKET_EVALUATION_READY -> evaluationStreamKey();
+            case BAR_30M, BAR_1H, BAR_4H, BAR_1D -> candleStreamKey();
+            default -> keyBase + ":events";
+        };
     }
 
     String deduplicationKey() {
-        return keyBase + ":seen";
+        return keyBase + ":seen:v2";
     }
 
     String latestKey(UUID instrumentId, MarketEventType eventType) {
@@ -360,13 +411,17 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         return keyBase + ":latest:" + instrumentId + ":" + eventType.name();
     }
 
-    public String recentBarsKey(UUID instrumentId) {
+    public String recentBarsKey(UUID instrumentId, MarketEventType eventType) {
         Objects.requireNonNull(instrumentId, "instrumentId");
-        return keyBase + ":bars:" + instrumentId + ":1m";
-    }
-
-    public String barUpdatesChannel() {
-        return keyBase + ":bar-updates";
+        Objects.requireNonNull(eventType, "eventType");
+        String timeframe = switch (eventType) {
+            case BAR_30M -> "30m";
+            case BAR_1H -> "1h";
+            case BAR_4H -> "4h";
+            case BAR_1D -> "1d";
+            default -> "none";
+        };
+        return keyBase + ":bars:" + instrumentId + ":" + timeframe;
     }
 
     public String availabilityKey(UUID instrumentId) {
@@ -430,6 +485,21 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
     private static int recentBarCapacity(int value) {
         if (value < 1 || value > 10_000) {
             throw new IllegalArgumentException("recentBarCapacity must be between 1 and 10000");
+        }
+        return value;
+    }
+
+    private static int positive(int value, String name) {
+        if (value <= 0) {
+            throw new IllegalArgumentException(name + " must be positive");
+        }
+        return value;
+    }
+
+    private static Duration positive(Duration value, String name) {
+        Objects.requireNonNull(value, name);
+        if (value.isZero() || value.isNegative()) {
+            throw new IllegalArgumentException(name + " must be positive");
         }
         return value;
     }

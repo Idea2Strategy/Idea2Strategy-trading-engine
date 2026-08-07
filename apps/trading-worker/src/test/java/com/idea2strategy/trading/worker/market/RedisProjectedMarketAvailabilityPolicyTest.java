@@ -79,7 +79,7 @@ class RedisProjectedMarketAvailabilityPolicyTest {
                 INSTRUMENT,
                 "ALPACA",
                 "SIP",
-                MarketEventType.BAR_1M,
+                MarketEventType.MARKET_EVALUATION_READY,
                 "bar-" + sequence,
                 NOW.minusSeconds(30),
                 NOW.minusSeconds(29),

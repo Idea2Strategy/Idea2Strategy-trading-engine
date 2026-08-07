@@ -16,4 +16,5 @@ dependencies {
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:testcontainers")
     testImplementation("org.java-websocket:Java-WebSocket:1.6.0")
+    testImplementation("io.lettuce:lettuce-core")
 }

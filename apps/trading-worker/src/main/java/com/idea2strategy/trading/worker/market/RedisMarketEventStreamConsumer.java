@@ -2,9 +2,11 @@ package com.idea2strategy.trading.worker.market;
 
 import com.idea2strategy.trading.market.redis.MarketEventStreamEntry;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
+import com.idea2strategy.trading.messaging.market.MarketEventType;
 import com.idea2strategy.trading.worker.runtime.EvaluatingBotRuntime;
 import io.lettuce.core.Consumer;
 import io.lettuce.core.RedisBusyException;
+import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.StreamMessage;
 import io.lettuce.core.XAutoClaimArgs;
 import io.lettuce.core.XGroupCreateArgs;
@@ -13,6 +15,7 @@ import io.lettuce.core.api.sync.RedisCommands;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,8 +36,8 @@ import org.slf4j.LoggerFactory;
  * redelivers the entry, and redelivery is safe by construction rather than by hope: the runtime derives
  * its batch id from the event, so the candidate processor's claim ledger recognises the second attempt,
  * and a bot's own sequence guard drops any event that does not move it forward. An entry whose decode
- * or evaluation throws is left pending on purpose — dropping it would silently lose a bar, and the
- * reclaim path is what an operator's retry looks like.
+ * or evaluation throws is retried a bounded number of times and then isolated in a dead-letter
+ * stream, so one poison entry cannot remain pending forever.
  *
  * <p><strong>What this consumer does not re-do.</strong> Ordering, duplicate suppression and correction
  * handling (C06) run on the producer, before publication; the stream may still carry an out-of-order or
@@ -42,8 +45,9 @@ import org.slf4j.LoggerFactory;
  * here would need the gateway's per-stream state, which this process does not have and must not guess.
  *
  * <p><strong>C09.</strong> The consumer owns its group lag and reads the gateway's instrument-keyed
- * availability projection. Missing, stale or malformed authority is a denial, and a denied entry stays
- * pending so it can be retried after recovery. The remaining gateway-owned inputs
+ * availability projection. Missing, stale or malformed authority is a denial. A denied entry is
+ * acknowledged without evaluation and counted separately; replaying it after a later recovery could
+ * create a stale order. The remaining gateway-owned inputs
  * — provider connectivity and session state — are the gateway's knowledge and are keyed by symbol,
  * and remain there deliberately, so this process never invents an instrument-to-symbol mapping.
  */
@@ -54,6 +58,23 @@ public final class RedisMarketEventStreamConsumer {
     /** The group every trading worker shares, so one entry reaches one replica. */
     public static final String CONSUMER_GROUP = "trading-workers";
 
+    private static final String RECORD_FAILURE_SCRIPT = """
+            local attempts = redis.call('HINCRBY', KEYS[2], ARGV[1], 1)
+            if attempts < tonumber(ARGV[2]) then
+              return attempts
+            end
+            redis.call('XADD', KEYS[3], '*',
+              'sourceStream', KEYS[1],
+              'sourceEntryId', ARGV[1],
+              'consumerGroup', ARGV[3],
+              'failure', ARGV[4],
+              'body', ARGV[5])
+            redis.call('XTRIM', KEYS[3], 'MAXLEN', '=', tonumber(ARGV[6]))
+            redis.call('XACK', KEYS[1], ARGV[3], ARGV[1])
+            redis.call('HDEL', KEYS[2], ARGV[1])
+            return attempts
+            """;
+
     private final RedisCommands<String, String> commands;
     private final EvaluatingBotRuntime runtime;
     private final String streamKey;
@@ -62,6 +83,13 @@ public final class RedisMarketEventStreamConsumer {
     private final Duration reclaimAfter;
     private final long maximumEntryLag;
     private final MarketEventAvailabilityPolicy availabilityPolicy;
+    private final int maximumDeliveryAttempts;
+    private final int deadLetterCapacity;
+    private final AtomicLong lastObservedLag = new AtomicLong();
+    private final AtomicLong processedEntries = new AtomicLong();
+    private final AtomicLong catchUpEntries = new AtomicLong();
+    private final AtomicLong deadLetteredEntries = new AtomicLong();
+    private final AtomicLong availabilitySkippedEntries = new AtomicLong();
 
     private boolean groupReady;
 
@@ -73,7 +101,8 @@ public final class RedisMarketEventStreamConsumer {
             int batchSize,
             Duration reclaimAfter,
             long maximumEntryLag) {
-        this(commands, runtime, streamKey, consumerName, batchSize, reclaimAfter, maximumEntryLag, event -> true);
+        this(commands, runtime, streamKey, consumerName, batchSize, reclaimAfter, maximumEntryLag,
+                event -> true, 5, 10_000);
     }
 
     public RedisMarketEventStreamConsumer(
@@ -85,6 +114,21 @@ public final class RedisMarketEventStreamConsumer {
             Duration reclaimAfter,
             long maximumEntryLag,
             MarketEventAvailabilityPolicy availabilityPolicy) {
+        this(commands, runtime, streamKey, consumerName, batchSize, reclaimAfter, maximumEntryLag,
+                availabilityPolicy, 5, 10_000);
+    }
+
+    public RedisMarketEventStreamConsumer(
+            RedisCommands<String, String> commands,
+            EvaluatingBotRuntime runtime,
+            String streamKey,
+            String consumerName,
+            int batchSize,
+            Duration reclaimAfter,
+            long maximumEntryLag,
+            MarketEventAvailabilityPolicy availabilityPolicy,
+            int maximumDeliveryAttempts,
+            int deadLetterCapacity) {
         this.commands = Objects.requireNonNull(commands, "commands");
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.streamKey = requireText(streamKey, "streamKey");
@@ -96,6 +140,8 @@ public final class RedisMarketEventStreamConsumer {
         }
         this.maximumEntryLag = maximumEntryLag;
         this.availabilityPolicy = Objects.requireNonNull(availabilityPolicy, "availabilityPolicy");
+        this.maximumDeliveryAttempts = requirePositive(maximumDeliveryAttempts, "maximumDeliveryAttempts");
+        this.deadLetterCapacity = requirePositive(deadLetterCapacity, "deadLetterCapacity");
     }
 
     /**
@@ -104,16 +150,15 @@ public final class RedisMarketEventStreamConsumer {
      */
     public int pollOnce() {
         ensureGroup();
-        int fed = deliver(reclaimAbandoned());
         long lag = entryLag();
-        if (lag > maximumEntryLag) {
-            // C09: a bot deciding on a bar this far behind is deciding on a market that has moved on.
-            // Reclaimed entries were already in flight, so they are finished; nothing new is started.
+        lastObservedLag.set(lag);
+        boolean catchUp = lag > maximumEntryLag;
+        if (catchUp) {
             log.warn("market event consumption is {} entries behind, beyond the {} allowed; "
-                    + "evaluation is paused until it catches up", lag, maximumEntryLag);
-            return fed;
+                    + "draining stale entries without producing orders", lag, maximumEntryLag);
         }
-        return fed + deliver(readNew());
+        int processed = deliver(reclaimAbandoned(), catchUp);
+        return processed + deliver(readNew(), catchUp);
     }
 
     /**
@@ -158,8 +203,8 @@ public final class RedisMarketEventStreamConsumer {
                 : reclaimed.getMessages();
     }
 
-    private int deliver(List<StreamMessage<String, String>> messages) {
-        int fed = 0;
+    private int deliver(List<StreamMessage<String, String>> messages, boolean catchUp) {
+        int processed = 0;
         for (StreamMessage<String, String> message : messages) {
             if (message.getBody() == null || message.getBody().isEmpty()) {
                 // A tombstone left by a trimmed or deleted entry: acknowledge it, there is nothing to
@@ -169,25 +214,89 @@ public final class RedisMarketEventStreamConsumer {
             }
             try {
                 MarketEventEnvelope event = MarketEventStreamEntry.decode(message.getBody());
-                if (!availabilityPolicy.permits(event)) {
-                    // The projection may be racing the event publication or may recover later. Leave
-                    // the entry pending so reclaim retries it; acknowledging would permanently lose
-                    // the evaluation that C09 temporarily prohibited.
-                    log.warn("market event {} is blocked by the gateway availability projection; left pending",
+                if (event.eventType() != MarketEventType.MARKET_EVALUATION_READY) {
+                    acknowledge(message.getId());
+                    log.warn("non-evaluation event {} appeared on the evaluation stream and was ignored",
                             event.eventId());
                     continue;
                 }
-                runtime.feed(event);
-                commands.xack(streamKey, CONSUMER_GROUP, message.getId());
-                fed++;
+                if (!catchUp && !availabilityPolicy.permits(event)) {
+                    acknowledge(message.getId());
+                    availabilitySkippedEntries.incrementAndGet();
+                    log.warn("market event {} is blocked by the gateway availability projection; "
+                                    + "acknowledged without evaluation",
+                            event.eventId());
+                    continue;
+                }
+                if (catchUp) {
+                    runtime.catchUp(event);
+                    catchUpEntries.incrementAndGet();
+                } else {
+                    runtime.feed(event);
+                }
+                acknowledge(message.getId());
+                processed++;
+                processedEntries.incrementAndGet();
             } catch (RuntimeException failure) {
-                // Left pending deliberately: the reclaim path will offer it again rather than losing a
-                // bar to one bad cycle.
-                log.error("market event entry {} could not be evaluated; left pending for reclaim",
-                        message.getId(), failure);
+                long attempts = recordFailure(message, failure);
+                if (attempts >= maximumDeliveryAttempts) {
+                    deadLetteredEntries.incrementAndGet();
+                    log.error("market event entry {} failed {} times and moved to {}",
+                            message.getId(), attempts, deadLetterStreamKey(), failure);
+                } else {
+                    log.error("market event entry {} could not be evaluated on attempt {}; left pending",
+                            message.getId(), attempts, failure);
+                }
             }
         }
-        return fed;
+        return processed;
+    }
+
+    private void acknowledge(String messageId) {
+        commands.xack(streamKey, CONSUMER_GROUP, messageId);
+        commands.hdel(failureCountKey(), messageId);
+    }
+
+    private long recordFailure(StreamMessage<String, String> message, RuntimeException failure) {
+        Object result = commands.eval(
+                RECORD_FAILURE_SCRIPT,
+                ScriptOutputType.INTEGER,
+                new String[] {streamKey, failureCountKey(), deadLetterStreamKey()},
+                message.getId(),
+                Integer.toString(maximumDeliveryAttempts),
+                CONSUMER_GROUP,
+                failure.getClass().getName() + ": " + Objects.toString(failure.getMessage(), ""),
+                Objects.toString(message.getBody(), "{}"),
+                Integer.toString(deadLetterCapacity));
+        return result instanceof Number number ? number.longValue() : Long.parseLong(result.toString());
+    }
+
+    String failureCountKey() {
+        return streamKey + ":delivery-failures";
+    }
+
+    String deadLetterStreamKey() {
+        return streamKey + ":dead-letter";
+    }
+
+    long lastObservedLag() {
+        return lastObservedLag.get();
+    }
+
+    long processedEntries() {
+        return processedEntries.get();
+    }
+
+    long catchUpEntries() {
+        return catchUpEntries.get();
+    }
+
+    long deadLetteredEntries() {
+        return deadLetteredEntries.get();
+    }
+
+    long availabilitySkippedEntries() {
+        return availabilitySkippedEntries.get();
     }
 
     /**

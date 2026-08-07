@@ -29,12 +29,21 @@ public final class AlpacaSipWebSocketTransport implements AlpacaSipTransport {
     }
 
     @Override
-    public void subscribe(List<String> symbols) {
+    public void subscribeTrades(List<String> symbols) {
+        sendSymbols("subscribe", symbols);
+    }
+
+    @Override
+    public void unsubscribeTrades(List<String> symbols) {
+        sendSymbols("unsubscribe", symbols);
+    }
+
+    private void sendSymbols(String action, List<String> symbols) {
         ApprovedSymbolUniverse universe = new ApprovedSymbolUniverse(symbols);
         String symbolArray = universe.symbols().stream()
                 .map(AlpacaSipWebSocketTransport::quote)
                 .collect(Collectors.joining(",", "[", "]"));
-        sender.send("{\"action\":\"subscribe\",\"bars\":" + symbolArray + "}");
+        sender.send("{\"action\":" + quote(action) + ",\"trades\":" + symbolArray + "}");
     }
 
     private static String quote(String value) {

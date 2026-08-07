@@ -28,14 +28,14 @@ class ContractFixtureResourcesTest {
     }
 
     @Test
-    void packagesProviderNeutralQuoteTradeAndOneMinuteBarExamples() throws IOException {
+    void packagesProviderNeutralQuoteTradeAndThirtyMinuteBarExamples() throws IOException {
         var fixture = resource("contracts/v1/provider-neutral-market-events.json");
 
         assertContains(
                 fixture,
                 "\"QUOTE\"",
                 "\"TRADE\"",
-                "\"BAR_1M\"",
+                "\"BAR_30M\"",
                 "\"ALPACA\"",
                 "\"SIP\"",
                 "\"instrumentId\"",

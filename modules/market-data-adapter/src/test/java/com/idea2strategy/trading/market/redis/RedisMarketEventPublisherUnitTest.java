@@ -81,34 +81,53 @@ class RedisMarketEventPublisherUnitTest {
         assertEquals(List.of(
                         "{unit-test:market}:events",
                         "{unit-test:market}:latest:" + AAPL_ID + ":QUOTE",
-                        "{unit-test:market}:seen",
-                        "{unit-test:market}:bars:" + AAPL_ID + ":1m",
-                        "{unit-test:market}:bar-updates"),
+                        "{unit-test:market}:seen:v2",
+                        "{unit-test:market}:bars:" + AAPL_ID + ":none"),
                 List.of(keys.getValue()));
         assertEquals(event.eventId(), arguments.getValue()[0]);
         assertEquals("42", arguments.getValue()[9]);
         assertEquals("0", arguments.getValue()[10]);
         assertEquals("1", arguments.getValue()[13]);
+        assertEquals("1000000", arguments.getValue()[18]);
     }
 
     @Test
     @SuppressWarnings("unchecked")
-    void retainsAndBroadcastsMinuteBarsForUserCharts() {
+    void retainsThirtyMinuteStrategyBarsWithoutDisplayFanout() {
         doReturn(List.of(1L, "1722510000000-0", 1L))
                 .when(commands)
                 .eval(anyString(), eq(ScriptOutputType.MULTI), any(String[].class), any(String[].class));
-        MarketEventEnvelope bar = minuteBar(42, "210.12");
+        MarketEventEnvelope bar = thirtyMinuteBar(42, "210.12");
 
         publisher.publish(new MarketEventOrderingProcessor().process(bar));
 
         ArgumentCaptor<String[]> keys = ArgumentCaptor.forClass(String[].class);
         ArgumentCaptor<String[]> arguments = ArgumentCaptor.forClass(String[].class);
         verify(commands).eval(anyString(), eq(ScriptOutputType.MULTI), keys.capture(), arguments.capture());
-        assertEquals("{unit-test:market}:bars:" + AAPL_ID + ":1m", keys.getValue()[3]);
-        assertEquals("{unit-test:market}:bar-updates", keys.getValue()[4]);
+        assertEquals("{unit-test:market}:bars:" + AAPL_ID + ":30m", keys.getValue()[3]);
         assertEquals("390", arguments.getValue()[14]);
         assertEquals(true, arguments.getValue()[15].contains("\"instrumentId\":\"" + AAPL_ID + "\""));
         assertEquals(true, arguments.getValue()[15].contains("\"close\":210.12"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void routesOnlyEvaluationReadyEventsToTheWorkerFacingStream() {
+        doReturn(List.of(1L, "1722510000000-0", 1L))
+                .when(commands)
+                .eval(anyString(), eq(ScriptOutputType.MULTI), any(String[].class), any(String[].class));
+        Instant boundary = Instant.parse("2026-08-01T15:00:00Z");
+        MarketEventEnvelope evaluation = new MarketEventEnvelope(
+                "evaluation-1", 2, AAPL_ID, "ALPACA", "SIP_30MIN_REST",
+                MarketEventType.MARKET_EVALUATION_READY, "evaluation-boundary-1",
+                boundary, boundary.plusSeconds(2), boundary.getEpochSecond() / 1800, 0, null,
+                Map.of("close", new BigDecimal("210.12"), "closed30m", BigDecimal.ONE));
+
+        publisher.publish(new MarketEventOrderingProcessor().process(evaluation));
+
+        ArgumentCaptor<String[]> keys = ArgumentCaptor.forClass(String[].class);
+        verify(commands).eval(anyString(), eq(ScriptOutputType.MULTI), keys.capture(), any(String[].class));
+        assertEquals("{unit-test:market}:strategy:evaluation-ready:v1", keys.getValue()[0]);
     }
 
     @Test
@@ -233,10 +252,10 @@ class RedisMarketEventPublisherUnitTest {
                 Map.of("price", new BigDecimal(price))));
     }
 
-    private static MarketEventEnvelope minuteBar(long sequence, String close) {
-        Instant occurredAt = Instant.parse("2026-08-01T14:30:00Z").plusSeconds(sequence * 60);
+    private static MarketEventEnvelope thirtyMinuteBar(long sequence, String close) {
+        Instant occurredAt = Instant.parse("2026-08-01T14:30:00Z").plusSeconds(sequence * 1800);
         return NORMALIZER.normalize(new AlpacaMarketInput(
-                MarketEventType.BAR_1M,
+                MarketEventType.BAR_30M,
                 "bar-" + sequence,
                 "AAPL",
                 "sip",

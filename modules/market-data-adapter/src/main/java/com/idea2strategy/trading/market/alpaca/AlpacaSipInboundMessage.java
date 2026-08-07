@@ -1,5 +1,7 @@
 package com.idea2strategy.trading.market.alpaca;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 public sealed interface AlpacaSipInboundMessage {
@@ -7,15 +9,28 @@ public sealed interface AlpacaSipInboundMessage {
 
     record Authenticated() implements AlpacaSipInboundMessage {}
 
-    record SubscriptionConfirmed(List<String> barSymbols) implements AlpacaSipInboundMessage {
+    record SubscriptionConfirmed(List<String> tradeSymbols) implements AlpacaSipInboundMessage {
         public SubscriptionConfirmed {
-            barSymbols = List.copyOf(barSymbols);
+            tradeSymbols = List.copyOf(tradeSymbols);
         }
     }
 
     record ProviderError(int code, String message) implements AlpacaSipInboundMessage {}
 
-    record MinuteBar(AlpacaMarketInput input) implements AlpacaSipInboundMessage {}
+    record TradeTick(
+            String symbol,
+            long tradeId,
+            String exchange,
+            BigDecimal price,
+            BigDecimal size,
+            Instant occurredAt,
+            Instant receivedAt,
+            List<String> conditions,
+            String tape) implements AlpacaSipInboundMessage {
+        public TradeTick {
+            conditions = List.copyOf(conditions);
+        }
+    }
 
     record UnsupportedFrame(String frameType) implements AlpacaSipInboundMessage {}
 }

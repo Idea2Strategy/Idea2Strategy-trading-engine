@@ -220,22 +220,68 @@ class MarketEventStreamE2ETest {
                         "select count(*) from trading.order_intents where bot_id = ?", BOT)));
     }
 
+    /** A permanently bad entry is retried a bounded number of times, then isolated for inspection. */
+    @Test
+    void aPoisonEntryMovesToTheDeadLetterStreamAfterTheConfiguredAttempts() throws Exception {
+        runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
+        connection.sync().xadd(
+                streamKey(), Map.of("eventId", "evt_poison", "schemaVersion", "1"));
+        RedisMarketEventStreamConsumer bounded = consumer(600L, Duration.ofMillis(1), 2);
+
+        assertEquals(0, bounded.pollOnce());
+        Thread.sleep(5L);
+        assertEquals(0, bounded.pollOnce());
+
+        assertAll(
+                () -> assertEquals(0, pendingEntries(), "the poison entry no longer blocks the group"),
+                () -> assertEquals(1, connection.sync().xlen(bounded.deadLetterStreamKey())),
+                () -> assertTrue(
+                        connection.sync()
+                                .xrange(bounded.deadLetterStreamKey(), io.lettuce.core.Range.unbounded())
+                                .getFirst().getBody().get("body").contains("evt_poison"),
+                        "the original body remains inspectable"));
+    }
+
+    /** A policy-denied event is skipped once and never becomes a stale order after recovery. */
+    @Test
+    void anAvailabilityDeniedEntryIsAcknowledgedWithoutEvaluation() {
+        runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
+        publish(1, "84");
+        RedisMarketEventStreamConsumer denied = new RedisMarketEventStreamConsumer(
+                connection.sync(), runtime, streamKey(), "worker-under-test", 128,
+                Duration.ofSeconds(60), 600L, event -> false, 5, 100);
+
+        int fed = denied.pollOnce();
+
+        assertAll(
+                () -> assertEquals(0, fed),
+                () -> assertEquals(0, pendingEntries()),
+                () -> assertEquals(1, denied.availabilitySkippedEntries()),
+                () -> assertEquals(0, count(
+                        "select count(*) from trading.order_intents where bot_id = ?", BOT)));
+    }
+
     /**
      * C09: a group too far behind stops feeding. A bot deciding on a bar that is minutes old is
      * deciding on a market that has moved on, and the canonical order it produces would be real.
      */
     @Test
-    void aGroupTooFarBehindStopsFeedingRatherThanDecidingOnStaleBars() {
+    void aGroupTooFarBehindDrainsWithoutOrdersThenResumesAtTheSafeEdge() {
         runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
         publish(1, "84");
         publish(2, "83");
 
-        int fed = consumer(1L).pollOnce();
+        RedisMarketEventStreamConsumer bounded = consumer(1L);
+        int caughtUp = bounded.pollOnce();
+        publish(3, "82");
+        int evaluated = bounded.pollOnce();
 
         assertAll(
-                () -> assertEquals(0, fed, "nothing new is started while the lag is beyond the maximum"),
-                () -> assertEquals(0, count(
-                        "select count(*) from trading.order_intents where bot_id = ?", BOT)));
+                () -> assertEquals(2, caughtUp, "stale entries are drained so lag can recover"),
+                () -> assertEquals(1, evaluated, "the first safe-edge entry is evaluated normally"),
+                () -> assertEquals(1, count(
+                        "select count(*) from trading.order_intents where bot_id = ?", BOT)),
+                () -> assertEquals(0, pendingEntries()));
     }
 
     // ------------------------------------------------------------------ fixtures
@@ -245,13 +291,18 @@ class MarketEventStreamE2ETest {
     }
 
     private RedisMarketEventStreamConsumer consumer(long maximumEntryLag, Duration reclaimAfter) {
+        return consumer(maximumEntryLag, reclaimAfter, 5);
+    }
+
+    private RedisMarketEventStreamConsumer consumer(
+            long maximumEntryLag, Duration reclaimAfter, int maximumDeliveryAttempts) {
         return new RedisMarketEventStreamConsumer(
                 connection.sync(), runtime, streamKey(), "worker-under-test", 128, reclaimAfter,
-                maximumEntryLag);
+                maximumEntryLag, event -> true, maximumDeliveryAttempts, 100);
     }
 
     private static String streamKey() {
-        return "{" + keyPrefix + ":market}:events";
+        return publisher.evaluationStreamKey();
     }
 
     /** Takes the entry as another replica would and never acknowledges it. */
@@ -276,15 +327,30 @@ class MarketEventStreamE2ETest {
     /** Publishes through the gateway's own publisher, so the layout under test is the real one. */
     private void publish(long sequence, String close) {
         var envelope = new MarketEventEnvelope(
-                "evt_rt3_" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.BAR_1M,
+                "evt_rt3_" + sequence, 2, INSTRUMENT, "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY,
                 "provider-" + sequence, EVENT_AT, EVENT_AT, sequence, 0, null,
-                Map.of("close", new BigDecimal(close)));
+                evaluationValues(close));
         publisher.publish(new com.idea2strategy.trading.market.alpaca.MarketEventHandlingResult(
                 com.idea2strategy.trading.market.alpaca.MarketEventHandlingStatus.APPLIED,
                 envelope,
                 sequence,
                 true,
                 true));
+    }
+
+    private static Map<String, BigDecimal> evaluationValues(String close) {
+        BigDecimal price = new BigDecimal(close);
+        return Map.ofEntries(
+                Map.entry("close", price),
+                Map.entry("closed30m", BigDecimal.ONE),
+                Map.entry("closed1h", BigDecimal.ZERO),
+                Map.entry("closed4h", BigDecimal.ZERO),
+                Map.entry("closed1d", BigDecimal.ZERO),
+                Map.entry("open30m", price),
+                Map.entry("high30m", price),
+                Map.entry("low30m", price),
+                Map.entry("close30m", price),
+                Map.entry("volume30m", BigDecimal.ONE));
     }
 
     private LoadedExecutionPlan plan() {
@@ -303,8 +369,8 @@ class MarketEventStreamE2ETest {
         }
         return new PreparedWarmup(
                 "manifest-rt3", "dataset-rt3", 1, "a".repeat(64),
-                Map.of("rsi-14-pt1m", new WarmupFeatureSeries(
-                        "rsi-14-pt1m", "RSI_14", "1.0.0", "PT1M", "manifest-rt3", "a".repeat(64),
+                Map.of("rsi-14-pt30m", new WarmupFeatureSeries(
+                        "rsi-14-pt30m", "RSI_14", "1.0.0", "PT30M", "manifest-rt3", "a".repeat(64),
                         observations)));
     }
 
@@ -314,16 +380,16 @@ class MarketEventStreamE2ETest {
                 "elementCatalogVersion":"basic-elements:2026-08-04",\
                 "instrumentCatalogVersion":"us-supported-universe:2026-08-04",\
                 "compilerVersion":"basic-compiler:1.0.0",\
-                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt1m",\
+                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt30m",\
                 "featureId":"c3000000-0000-4000-8000-000000000401","featureVersion":"1.0.0",\
-                "instruments":["%s"],"resolution":"PT1M","requiredObservations":14}],\
+                "instruments":["%s"],"resolution":"PT30M","requiredObservations":14}],\
                 "executionSnapshot":{"immutableStrategyVersion":{\
                 "snapshotSchemaVersion":"basic-launch-snapshot.v1","semanticHash":"sha256:%s",\
                 "snapshotHash":"sha256:%s"},"mode":"BASIC","initialCashAmount":"100000.00000000",\
                 "currency":"USD","partitions":[{"key":"partition-1","budgetCapBps":10000,\
                 "flows":[{"key":"%s","officialInstrumentIds":["%s"]}]}]},\
                 "steps":[{"sequence":1,"operation":"LOAD_FEATURE",\
-                "arguments":{"feature":"RSI_14","resolution":"1m"}},{"sequence":2,"operation":"COMPARE",\
+                "arguments":{"feature":"RSI_14","resolution":"30m"}},{"sequence":2,"operation":"COMPARE",\
                 "arguments":{"operator":"LT","threshold":"30"}},{"sequence":3,\
                 "operation":"EMIT_ORDER_CANDIDATE",\
                 "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],\

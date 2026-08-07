@@ -100,7 +100,7 @@ class BotControlIntegrationE2ETest {
      * plan below without updating this fails loudly, which is what a checksummed contract is for.
      */
     private static final String PLAN_CHECKSUM =
-            "sha256:8e8d84f85fd95e8d9aa3d7a8240231c70ea8e658eeaf38bd161eb2f1239911d6";
+            "sha256:1edb5912c55919d0a3812319d9d9e316dce6c73f1b17b81c0aa700d53a1481db";
 
     private static final Instant ELIGIBLE_FROM = Instant.parse("2026-08-02T13:30:00Z");
     private static final Instant EVENT_AT = Instant.parse("2026-08-02T14:30:00Z");
@@ -475,14 +475,14 @@ class BotControlIntegrationE2ETest {
         }
         return new PreparedWarmup(
                 "manifest-b91", "dataset-b91", 1, "a".repeat(64),
-                Map.of("rsi-14-pt1m", new WarmupFeatureSeries(
-                        "rsi-14-pt1m", "RSI_14", "1.0.0", "PT1M", "manifest-b91", "a".repeat(64),
+                Map.of("rsi-14-pt30m", new WarmupFeatureSeries(
+                        "rsi-14-pt30m", "RSI_14", "1.0.0", "PT30M", "manifest-b91", "a".repeat(64),
                         observations)));
     }
 
     private MarketEventEnvelope event(long sequence, String close) {
         return new MarketEventEnvelope(
-                "market-" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.BAR_1M,
+                "market-" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY,
                 "provider-" + sequence, EVENT_AT, EVENT_AT, sequence, 0, null,
                 Map.of("close", new BigDecimal(close)));
     }
@@ -494,16 +494,16 @@ class BotControlIntegrationE2ETest {
                 "elementCatalogVersion":"basic-elements:2026-08-04",\
                 "instrumentCatalogVersion":"us-supported-universe:2026-08-04",\
                 "compilerVersion":"basic-compiler:1.0.0",\
-                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt1m",\
+                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt30m",\
                 "featureId":"b9100000-0000-4000-8000-000000000401","featureVersion":"1.0.0",\
-                "instruments":["%s"],"resolution":"PT1M","requiredObservations":14}],\
+                "instruments":["%s"],"resolution":"PT30M","requiredObservations":14}],\
                 "executionSnapshot":{"immutableStrategyVersion":{\
                 "snapshotSchemaVersion":"basic-launch-snapshot.v1","semanticHash":"sha256:%s",\
                 "snapshotHash":"sha256:%s"},"mode":"BASIC","initialCashAmount":"100000.00000000",\
                 "currency":"USD","partitions":[{"key":"partition-1","budgetCapBps":10000,\
                 "flows":[{"key":"%s","officialInstrumentIds":["%s"]}]}]},\
                 "steps":[{"sequence":1,"operation":"LOAD_FEATURE",\
-                "arguments":{"feature":"RSI_14","resolution":"1m"}},{"sequence":2,"operation":"COMPARE",\
+                "arguments":{"feature":"RSI_14","resolution":"30m"}},{"sequence":2,"operation":"COMPARE",\
                 "arguments":{"operator":"LT","threshold":"30"}},{"sequence":3,\
                 "operation":"EMIT_ORDER_CANDIDATE",\
                 "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],\

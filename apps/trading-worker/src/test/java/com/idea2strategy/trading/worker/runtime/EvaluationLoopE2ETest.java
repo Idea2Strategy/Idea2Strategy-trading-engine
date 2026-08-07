@@ -350,9 +350,9 @@ class EvaluationLoopE2ETest {
         runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
 
         MarketEventEnvelope other = new MarketEventEnvelope(
-                "market-other", 1, UUID.fromString("c2000000-0000-4000-8000-0000000000ff"),
-                "ALPACA", "SIP", MarketEventType.BAR_1M, "p-other", EVENT_AT, EVENT_AT,
-                99, 0, null, Map.of("close", new BigDecimal("84")));
+                "market-other", 2, UUID.fromString("c2000000-0000-4000-8000-0000000000ff"),
+                "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY, "p-other", EVENT_AT, EVENT_AT,
+                99, 0, null, evaluationValues("84"));
 
         assertTrue(runtime.feed(other).isEmpty());
     }
@@ -389,8 +389,8 @@ class EvaluationLoopE2ETest {
         }
         return new PreparedWarmup(
                 "manifest-rt2", "dataset-rt2", 1, "a".repeat(64),
-                Map.of("rsi-14-pt1m", new WarmupFeatureSeries(
-                        "rsi-14-pt1m", "RSI_14", "1.0.0", "PT1M", "manifest-rt2", "a".repeat(64),
+                Map.of("rsi-14-pt30m", new WarmupFeatureSeries(
+                        "rsi-14-pt30m", "RSI_14", "1.0.0", "PT30M", "manifest-rt2", "a".repeat(64),
                         observations)));
     }
 
@@ -400,9 +400,24 @@ class EvaluationLoopE2ETest {
 
     private MarketEventEnvelope eventAt(long sequence, String close, Instant observedAt) {
         return new MarketEventEnvelope(
-                "market-" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.BAR_1M,
+                "market-" + sequence, 2, INSTRUMENT, "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY,
                 "provider-" + sequence, observedAt, observedAt, sequence, 0, null,
-                Map.of("close", new BigDecimal(close)));
+                evaluationValues(close));
+    }
+
+    private static Map<String, BigDecimal> evaluationValues(String close) {
+        BigDecimal price = new BigDecimal(close);
+        return Map.ofEntries(
+                Map.entry("close", price),
+                Map.entry("closed30m", BigDecimal.ONE),
+                Map.entry("closed1h", BigDecimal.ZERO),
+                Map.entry("closed4h", BigDecimal.ZERO),
+                Map.entry("closed1d", BigDecimal.ZERO),
+                Map.entry("open30m", price),
+                Map.entry("high30m", price),
+                Map.entry("low30m", price),
+                Map.entry("close30m", price),
+                Map.entry("volume30m", BigDecimal.ONE));
     }
 
     /** The document B publishes, buying when RSI_14 falls below 30 with equal allocation. */
@@ -412,16 +427,16 @@ class EvaluationLoopE2ETest {
                 "elementCatalogVersion":"basic-elements:2026-08-04",
                 "instrumentCatalogVersion":"us-supported-universe:2026-08-04",
                 "compilerVersion":"basic-compiler:1.0.0",
-                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt1m",
+                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt30m",
                 "featureId":"c2000000-0000-4000-8000-000000000401","featureVersion":"1.0.0",
-                "instruments":["%s"],"resolution":"PT1M","requiredObservations":14}],
+                "instruments":["%s"],"resolution":"PT30M","requiredObservations":14}],
                 "executionSnapshot":{"immutableStrategyVersion":{
                 "snapshotSchemaVersion":"basic-launch-snapshot.v1","semanticHash":"sha256:%s",
                 "snapshotHash":"sha256:%s"},"mode":"BASIC","initialCashAmount":"100000.00000000",
                 "currency":"USD","partitions":[{"key":"partition-1","budgetCapBps":10000,
                 "flows":[{"key":"%s","officialInstrumentIds":["%s"]}]}]},
                 "steps":[{"sequence":1,"operation":"LOAD_FEATURE",
-                "arguments":{"feature":"RSI_14","resolution":"1m"}},{"sequence":2,"operation":"COMPARE",
+                "arguments":{"feature":"RSI_14","resolution":"30m"}},{"sequence":2,"operation":"COMPARE",
                 "arguments":{"operator":"LT","threshold":"30"}},{"sequence":3,
                 "operation":"EMIT_ORDER_CANDIDATE",
                 "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],
@@ -443,7 +458,7 @@ class EvaluationLoopE2ETest {
                 "currency":"USD","partitions":[{"key":"partition-1","budgetCapBps":10000,
                 "flows":[{"key":"%s","officialInstrumentIds":["%s"]}]}]},
                 "steps":[{"sequence":1,"operation":"PRICE_COMPARE",
-                "arguments":{"resolution":"1m","operator":"GT","reference":"PREVIOUS_CLOSE"}},
+                "arguments":{"resolution":"30m","operator":"GT","reference":"PREVIOUS_CLOSE"}},
                 {"sequence":2,"operation":"EMIT_ORDER_CANDIDATE",
                 "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],
                 "planChecksum":"sha256:%s"}

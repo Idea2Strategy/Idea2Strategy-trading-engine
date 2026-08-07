@@ -59,7 +59,8 @@ class RedisMarketEventPublisherTest {
             assertTrue(first.latestUpdated());
             assertEquals(MarketEventPublishStatus.DUPLICATE, duplicateAfterRestart.status());
             assertEquals(1, publisher.streamLength());
-            assertEquals(event, publisher.findLatest(AAPL_ID, MarketEventType.QUOTE).orElseThrow());
+            assertEquals(event, publisher.findLatest(
+                    AAPL_ID, MarketEventType.MARKET_EVALUATION_READY).orElseThrow());
         }
     }
 
@@ -78,7 +79,8 @@ class RedisMarketEventPublisherTest {
             assertEquals(MarketEventPublishStatus.PUBLISHED, correction.status());
             assertFalse(correction.latestUpdated());
             assertEquals(3, publisher.streamLength());
-            assertEquals(latest, publisher.findLatest(AAPL_ID, MarketEventType.QUOTE).orElseThrow());
+            assertEquals(latest, publisher.findLatest(
+                    AAPL_ID, MarketEventType.MARKET_EVALUATION_READY).orElseThrow());
         }
     }
 
@@ -89,13 +91,32 @@ class RedisMarketEventPublisherTest {
         try (RedisClient client = RedisClient.create(redisUri());
                 var connection = client.connect();
                 RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(redisUri(), prefix)) {
-            connection.sync().set(publisher.latestKey(AAPL_ID, MarketEventType.QUOTE), "wrong-type");
+            connection.sync().set(
+                    publisher.latestKey(AAPL_ID, MarketEventType.MARKET_EVALUATION_READY),
+                    "wrong-type");
 
             assertThrows(
                     RedisCommandExecutionException.class,
                     () -> publisher.publish(new MarketEventOrderingProcessor().process(event)));
             assertEquals(0, publisher.streamLength());
-            assertEquals(0, connection.sync().scard(publisher.deduplicationKey()));
+            assertEquals(0, connection.sync().zcard(publisher.deduplicationKey()));
+        }
+    }
+
+    @Test
+    void boundsTheEventStreamAndExpiresOldDeduplicationIds() {
+        String prefix = prefix();
+        try (RedisClient client = RedisClient.create(redisUri());
+                var connection = client.connect();
+                RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(
+                        redisUri(), prefix, 390, 2, Duration.ofSeconds(1))) {
+            MarketEventOrderingProcessor ordering = new MarketEventOrderingProcessor();
+            publisher.publish(ordering.process(event("quote-41", 41, 0, "210.10")));
+            publisher.publish(ordering.process(event("quote-42", 42, 0, "210.12")));
+            publisher.publish(ordering.process(event("quote-43", 43, 0, "210.13")));
+
+            assertEquals(2, publisher.streamLength());
+            assertEquals(1, connection.sync().zcard(publisher.deduplicationKey()));
         }
     }
 
@@ -214,7 +235,7 @@ class RedisMarketEventPublisherTest {
             String price) {
         Instant occurredAt = Instant.parse("2026-08-01T14:30:00Z").plusSeconds(sequence);
         return NORMALIZER.normalize(new AlpacaMarketInput(
-                MarketEventType.QUOTE,
+                MarketEventType.MARKET_EVALUATION_READY,
                 providerEventId,
                 "AAPL",
                 "sip",

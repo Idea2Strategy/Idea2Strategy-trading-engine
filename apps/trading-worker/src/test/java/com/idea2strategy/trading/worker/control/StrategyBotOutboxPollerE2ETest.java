@@ -53,7 +53,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(properties = {
         "spring.flyway.enabled=true",
         "spring.flyway.table=flyway_schema_history_private",
-        "spring.flyway.baseline-on-migrate=true"
+        "spring.flyway.baseline-on-migrate=true",
+        // This test drives its own deterministic poller and clock.
+        "trading.bot-control.transport.enabled=false"
 })
 class StrategyBotOutboxPollerE2ETest {
 
@@ -255,17 +257,17 @@ class StrategyBotOutboxPollerE2ETest {
                 {"contractVersion":"strategy-bot.v1","schemaVersion":"basic-compiled-plan.v1",
                 "elementCatalogVersion":"basic-elements:2026-07-31",
                 "instrumentCatalogVersion":"us-supported-universe:2026-07-31","compilerVersion":"basic-compiler:1.0.0",
-                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt1m",
+                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt30m",
                 "featureId":"%s","featureVersion":"1.0.0","instruments":["%s"],
-                "resolution":"PT1M","requiredObservations":14}],"executionSnapshot":{"immutableStrategyVersion":{
+                "resolution":"PT30M","requiredObservations":14}],"executionSnapshot":{"immutableStrategyVersion":{
                 "snapshotSchemaVersion":"basic-launch-snapshot.v1","semanticHash":"sha256:%s",
                 "snapshotHash":"sha256:%s"},"mode":"BASIC","initialCashAmount":"100000.00000000","currency":"USD",
                 "partitions":[{"key":"partition-1","budgetCapBps":10000,"flows":[{"key":"flow-1",
                 "officialInstrumentIds":["%s"]}]}]},"steps":[{"sequence":1,"operation":"LOAD_FEATURE",
-                "arguments":{"feature":"RSI_14","resolution":"1m"}},{"sequence":2,"operation":"COMPARE",
+                "arguments":{"feature":"RSI_14","resolution":"30m"}},{"sequence":2,"operation":"COMPARE",
                 "arguments":{"operator":"LT","threshold":"30"}},{"sequence":3,"operation":"EMIT_ORDER_CANDIDATE",
                 "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],
-                "planChecksum":"sha256:3074991f2c223c31761ba3bc144d392383ddb24aaf756d94391ba0a08c1146de"}
+                "planChecksum":"sha256:87837a0367ee346428f84d7eedf3a00289e10db105588eba84c7729e4731a4f6"}
                 """.formatted("3".repeat(64), UUID.fromString("f91f0000-0000-4000-8000-000000000001"),
                         instrument, "2".repeat(64), SNAPSHOT_HASH, instrument);
     }
