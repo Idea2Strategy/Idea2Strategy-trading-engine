@@ -44,6 +44,9 @@ public final class StartupWarmupCoordinator {
 
     public PreparedWarmup prepare(WarmupRequest request) {
         Objects.requireNonNull(request, "request");
+        if (request.requirements().isEmpty()) {
+            return PreparedWarmup.none();
+        }
         WarmupDataSnapshot snapshot = source.load(request)
                 .orElseThrow(() -> failure(WarmupFailure.SNAPSHOT_NOT_FOUND, request.botId().toString()));
         DatasetManifestSnapshot manifest = snapshot.manifest();

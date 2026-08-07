@@ -30,11 +30,18 @@ public class EvaluationRuntimeConfiguration {
     }
 
     @Bean
+    PostgresPositionMetricSource positionMetricSource(JdbcClient jdbc) {
+        return new PostgresPositionMetricSource(jdbc);
+    }
+
+    @Bean
     EvaluatingBotRuntime evaluatingBotRuntime(
             CandidateBatchProcessor processor,
             OrderCandidateBatchAdapter adapter,
             PostgresBotScopeResolver scopeResolver,
-            PostgresEvaluationRunRecorder runRecorder) {
-        return new EvaluatingBotRuntime(processor, adapter, scopeResolver, runRecorder);
+            PostgresEvaluationRunRecorder runRecorder,
+            PostgresPositionMetricSource positionMetricSource) {
+        return new EvaluatingBotRuntime(
+                processor, adapter, scopeResolver, runRecorder, positionMetricSource);
     }
 }

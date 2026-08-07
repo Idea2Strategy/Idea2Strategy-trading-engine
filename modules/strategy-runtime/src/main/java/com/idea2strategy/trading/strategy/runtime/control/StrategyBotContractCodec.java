@@ -307,9 +307,6 @@ public final class StrategyBotContractCodec {
 
     private static List<WarmupRequirement> requiredWarmupRequirements(JsonNode root) {
         JsonNode values = requiredArray(root, "requiredFeatures");
-        if (values.isEmpty()) {
-            throw failure(BotControlFailure.INVALID_MESSAGE, "requiredFeatures must not be empty");
-        }
         Set<String> requirementIds = new HashSet<>();
         Set<String> requirementKeys = new HashSet<>();
         List<WarmupRequirement> requirements = new ArrayList<>();

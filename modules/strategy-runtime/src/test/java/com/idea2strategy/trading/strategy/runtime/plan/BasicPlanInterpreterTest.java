@@ -151,6 +151,73 @@ class BasicPlanInterpreterTest {
                         () -> interpreter.interpret("{\"schemaVersion\":\"basic-compiled-plan.v1\"}")));
     }
 
+    @Test
+    void acceptsEveryDirectOperationPublishedByTheBasicCatalog() {
+        Map<String, String> argumentsByOperation = Map.ofEntries(
+                Map.entry("PRICE_COMPARE", "\"resolution\":\"1m\",\"operator\":\"GT\",\"reference\":\"PREVIOUS_CLOSE\""),
+                Map.entry("PRICE_CHANGE_PERCENT", "\"resolution\":\"1m\",\"base\":\"PREVIOUS_CLOSE\",\"direction\":\"UP\",\"thresholdPercent\":\"3\""),
+                Map.entry("VOLUME_COMPARE", "\"resolution\":\"1m\",\"operator\":\"GTE\",\"reference\":\"AVERAGE_VOLUME\",\"period\":\"5\",\"multiplier\":\"2\""),
+                Map.entry("STREAK", "\"resolution\":\"1m\",\"direction\":\"UP\",\"bars\":\"3\""),
+                Map.entry("SMA_CROSS", "\"resolution\":\"1m\",\"direction\":\"UP\",\"shortPeriod\":\"5\",\"longPeriod\":\"20\""),
+                Map.entry("RSI_CROSS", "\"resolution\":\"1m\",\"direction\":\"UP\",\"period\":\"14\",\"threshold\":\"30\""),
+                Map.entry("MACD_CROSS", "\"resolution\":\"1m\",\"direction\":\"UP\",\"fastPeriod\":\"12\",\"slowPeriod\":\"26\",\"signalPeriod\":\"9\""),
+                Map.entry("BOLLINGER_REVERSAL", "\"resolution\":\"1m\",\"direction\":\"UP\",\"period\":\"20\",\"deviations\":\"2\""),
+                Map.entry("POSITION_RETURN", "\"direction\":\"PROFIT\",\"thresholdPercent\":\"5\""),
+                Map.entry("HOLDING_PERIOD", "\"unit\":\"BAR\",\"amount\":\"5\",\"resolution\":\"1m\""),
+                Map.entry("PEAK_RETURN", "\"operator\":\"GTE\",\"thresholdPercent\":\"10\""),
+                Map.entry("DRAWDOWN_FROM_PEAK", "\"operator\":\"GTE\",\"thresholdPercent\":\"3\""),
+                Map.entry("SCHEDULE", "\"cycle\":\"EVERY_N_TRADING_DAYS\",\"interval\":\"5\",\"resolution\":\"1m\""));
+
+        argumentsByOperation.forEach((operation, arguments) -> {
+            var plan = interpreter.interpret(directPlan(operation, arguments, "BUY"));
+            assertEquals("step-1:" + operation,
+                    plan.flows().getFirst().conditionSteps().getFirst().stepId());
+        });
+    }
+
+    @Test
+    void directPricePositionAndScheduleBlocksMakeRealDecisions() {
+        var price = interpreter.interpret(directPlan("PRICE_COMPARE",
+                "\"resolution\":\"1m\",\"operator\":\"GT\",\"reference\":\"PREVIOUS_CLOSE\"", "BUY"));
+        var position = interpreter.interpret(directPlan("POSITION_RETURN",
+                "\"direction\":\"PROFIT\",\"thresholdPercent\":\"5\"", "SELL"));
+        var schedule = interpreter.interpret(directPlan("SCHEDULE",
+                "\"cycle\":\"EVERY_N_TRADING_DAYS\",\"interval\":\"5\",\"resolution\":\"1m\"", "BUY"));
+
+        BasicExecutionResult priceResult = executor.execute(new BasicExecutionRequest(
+                EVALUATION, price.flows(), Map.of(INSTRUMENT, new BasicInstrumentInput(INSTRUMENT,
+                        Map.of("bar.closed.1m", "true", "closes.1m", "99,101")))));
+        BasicExecutionResult positionResult = executor.execute(new BasicExecutionRequest(
+                EVALUATION, position.flows(), Map.of(INSTRUMENT, new BasicInstrumentInput(INSTRUMENT,
+                        Map.of("position.returnPercent", "5.25")))));
+        BasicExecutionResult scheduleResult = executor.execute(new BasicExecutionRequest(
+                EVALUATION, schedule.flows(), Map.of(INSTRUMENT, new BasicInstrumentInput(INSTRUMENT,
+                        Map.of("schedule.newTradingDay", "true", "schedule.tradingDayIndex", "6")))));
+
+        assertAll(
+                () -> assertEquals(BasicDecisionStatus.CANDIDATE,
+                        priceResult.decisions().getFirst().status()),
+                () -> assertEquals(BasicDecisionStatus.CANDIDATE,
+                        positionResult.decisions().getFirst().status()),
+                () -> assertEquals(BasicDecisionStatus.CANDIDATE,
+                        scheduleResult.decisions().getFirst().status()));
+    }
+
+    @Test
+    void aDirectBarBlockWaitsForTheRequestedBarToClose() {
+        var plan = interpreter.interpret(directPlan("PRICE_COMPARE",
+                "\"resolution\":\"5m\",\"operator\":\"GT\",\"reference\":\"PREVIOUS_CLOSE\"", "BUY"));
+        BasicExecutionResult result = executor.execute(new BasicExecutionRequest(
+                EVALUATION, plan.flows(), Map.of(INSTRUMENT, new BasicInstrumentInput(INSTRUMENT,
+                        Map.of("bar.closed.5m", "false", "closes.5m", "99,101")))));
+
+        assertAll(
+                () -> assertEquals(BasicDecisionStatus.CONDITION_NOT_MET,
+                        result.decisions().getFirst().status()),
+                () -> assertEquals("WAITING_FOR_BAR_CLOSE",
+                        result.decisions().getFirst().trace().getFirst().reasonCode()));
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private BasicExecutionResult execute(
@@ -189,6 +256,16 @@ class BasicPlanInterpreterTest {
                 "planChecksum":"sha256:%s"}
                 """.formatted("3".repeat(64), ids, "2".repeat(64), "1".repeat(64), ids,
                         operator, threshold, "4".repeat(64));
+    }
+
+    private static String directPlan(String operation, String arguments, String side) {
+        return """
+                {"schemaVersion":"basic-compiled-plan.v2","executionSnapshot":{"partitions":[
+                {"key":"partition-1","flows":[{"key":"flow-1","officialInstrumentIds":["%s"],
+                "steps":[{"sequence":1,"operation":"%s","arguments":{%s}},
+                {"sequence":2,"operation":"EMIT_ORDER_CANDIDATE","arguments":{
+                "allocation":"EQUAL","orderType":"MARKET","side":"%s"}}]}]}]}}
+                """.formatted(INSTRUMENT, operation, arguments, side);
     }
 
     /**
