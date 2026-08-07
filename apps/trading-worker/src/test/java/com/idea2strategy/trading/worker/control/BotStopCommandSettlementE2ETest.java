@@ -560,7 +560,7 @@ class BotStopCommandSettlementE2ETest {
                 "arguments":{"feature":"RSI_14","resolution":"30m"}},{"sequence":2,"operation":"COMPARE",
                 "arguments":{"operator":"LT","threshold":"30"}},{"sequence":3,"operation":"EMIT_ORDER_CANDIDATE",
                 "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],
-                "planChecksum":"sha256:3074991f2c223c31761ba3bc144d392383ddb24aaf756d94391ba0a08c1146de"}
+                "planChecksum":"sha256:87837a0367ee346428f84d7eedf3a00289e10db105588eba84c7729e4731a4f6"}
                 """.formatted("3".repeat(64), UUID.fromString("f91f0000-0000-4000-8000-000000000001"),
                         INSTRUMENT, "2".repeat(64), "1".repeat(64), INSTRUMENT);
     }

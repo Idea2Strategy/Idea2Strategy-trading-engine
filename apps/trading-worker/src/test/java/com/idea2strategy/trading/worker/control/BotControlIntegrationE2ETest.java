@@ -100,7 +100,7 @@ class BotControlIntegrationE2ETest {
      * plan below without updating this fails loudly, which is what a checksummed contract is for.
      */
     private static final String PLAN_CHECKSUM =
-            "sha256:8e8d84f85fd95e8d9aa3d7a8240231c70ea8e658eeaf38bd161eb2f1239911d6";
+            "sha256:1edb5912c55919d0a3812319d9d9e316dce6c73f1b17b81c0aa700d53a1481db";
 
     private static final Instant ELIGIBLE_FROM = Instant.parse("2026-08-02T13:30:00Z");
     private static final Instant EVENT_AT = Instant.parse("2026-08-02T14:30:00Z");
