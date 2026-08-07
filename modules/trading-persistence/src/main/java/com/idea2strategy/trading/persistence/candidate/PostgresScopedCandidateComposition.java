@@ -320,7 +320,10 @@ public class PostgresScopedCandidateComposition implements ScopedCandidateCompos
             BigDecimal available = lots.stream()
                     .map(LotReservationAllocation::reservedQuantity)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal wanted = candidate.requestedQuantity().orElse(available);
+            BigDecimal wanted = candidate.requestedQuantity().orElseGet(() ->
+                    available.multiply(BigDecimal.valueOf(
+                                    candidate.requestedPositionPercent().orElse(100)))
+                            .divide(BigDecimal.valueOf(100), 0, RoundingMode.DOWN));
             if (available.signum() == 0 || wanted.signum() == 0) {
                 Sizing rejected = new Sizing(
                         side, candidate.requestedQuantity().orElse(MINIMUM_REQUESTED_QUANTITY));

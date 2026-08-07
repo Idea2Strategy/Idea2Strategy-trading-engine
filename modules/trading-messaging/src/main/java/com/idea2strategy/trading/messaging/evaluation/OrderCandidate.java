@@ -41,7 +41,8 @@ public record OrderCandidate(
         Integer allocationDenominator,
         BigDecimal referencePrice,
         BigDecimal limitPrice,
-        List<String> reasonCodes) {
+        List<String> reasonCodes,
+        Integer positionPercent) {
 
     public OrderCandidate {
         candidateId = Objects.requireNonNull(candidateId, "candidateId");
@@ -57,7 +58,27 @@ public record OrderCandidate(
             referencePrice = requirePositive(referencePrice, "referencePrice");
         }
         requireAllocation(side, quantity, allocationNumerator, allocationDenominator);
+        if (positionPercent != null
+                && (side != OrderSide.SELL || positionPercent < 1 || positionPercent > 100)) {
+            throw new IllegalArgumentException(
+                    "positionPercent is allowed only for SELL and must be between 1 and 100");
+        }
         reasonCodes = List.copyOf(Objects.requireNonNull(reasonCodes, "reasonCodes"));
+    }
+
+    public OrderCandidate(
+            UUID candidateId,
+            UUID instrumentId,
+            UUID flowId,
+            OrderSide side,
+            BigDecimal quantity,
+            Integer allocationNumerator,
+            Integer allocationDenominator,
+            BigDecimal referencePrice,
+            BigDecimal limitPrice,
+            List<String> reasonCodes) {
+        this(candidateId, instrumentId, flowId, side, quantity, allocationNumerator,
+                allocationDenominator, referencePrice, limitPrice, reasonCodes, null);
     }
 
     /** The version 1 shape, kept so an existing producer keeps deserialising unchanged. */
@@ -116,6 +137,23 @@ public record OrderCandidate(
         return new OrderCandidate(
                 candidateId, instrumentId, flowId, OrderSide.SELL, null, null, null,
                 referencePrice, limitPrice, reasonCodes);
+    }
+
+    public static OrderCandidate partialHeldSell(
+            UUID candidateId,
+            UUID instrumentId,
+            UUID flowId,
+            int positionPercent,
+            BigDecimal referencePrice,
+            BigDecimal limitPrice,
+            List<String> reasonCodes) {
+        return new OrderCandidate(
+                candidateId, instrumentId, flowId, OrderSide.SELL, null, null, null,
+                referencePrice, limitPrice, reasonCodes, positionPercent);
+    }
+
+    public Optional<Integer> requestedPositionPercent() {
+        return Optional.ofNullable(positionPercent);
     }
 
     /** The owning flow, present from schema version 2. */

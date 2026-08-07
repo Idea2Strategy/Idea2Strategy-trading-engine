@@ -39,3 +39,13 @@ gradle :apps:trading-worker:bootRun
 
 두 App 모두 Docker 내부 네트워크에서 동작하며 호스트 포트를 열지 않습니다.
 
+## Basic catalog execution
+
+`basic-elements:2026-08-08`로 발행된 전략은 `30m`, `1h`, `4h`, `1d` 중 하나의 주기만
+사용합니다. 전체 Basic 조건 카탈로그를 실시간 상태로 평가하며, 주문 블록의 주문 비율,
+1회 실행, 주기 실행, 조건 재충족, N봉·N거래일 대기, 최대 실행 횟수를 bot별 순차 gate에서
+결정적으로 적용합니다. 매수 비율은 equal-allocation share에, 매도 비율은 composer가 읽은
+실제 보유 포지션에 적용됩니다. worker 재시작 시에는 현재 포지션 주기의 canonical order
+intent에서 실행 횟수와 마지막 실행 시각을 복원하며, 포지션이 완전히 종료된 뒤 다음 주기가
+시작될 때 gate를 초기화합니다. 이전 catalog reader는 이미 릴리스된 bot의 동작 보존용입니다.
+

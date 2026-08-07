@@ -218,6 +218,22 @@ class BasicPlanInterpreterTest {
                         result.decisions().getFirst().trace().getFirst().reasonCode()));
     }
 
+    @Test
+    void productionCatalogAcceptsOnlyNewResolutionsAndCarriesTerminalExecutionPolicy() {
+        String accepted = productionDirectPlan("4h");
+        String legacyResolution = productionDirectPlan("1m");
+
+        var plan = interpreter.interpret(accepted);
+
+        assertAll(
+                () -> assertEquals(25, plan.executionPolicyByFlowKey().get("flow-1").orderPercent()),
+                () -> assertEquals("대기 후 재진입",
+                        plan.executionPolicyByFlowKey().get("flow-1").executionMode()),
+                () -> assertEquals(3, plan.executionPolicyByFlowKey().get("flow-1").maxExecutions()),
+                () -> assertThrows(IllegalArgumentException.class,
+                        () -> interpreter.interpret(legacyResolution)));
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private BasicExecutionResult execute(
@@ -266,6 +282,25 @@ class BasicPlanInterpreterTest {
                 {"sequence":2,"operation":"EMIT_ORDER_CANDIDATE","arguments":{
                 "allocation":"EQUAL","orderType":"MARKET","side":"%s"}}]}]}]}}
                 """.formatted(INSTRUMENT, operation, arguments, side);
+    }
+
+    private static String productionDirectPlan(String resolution) {
+        return directPlan(
+                        "PRICE_COMPARE",
+                        "\"resolution\":\"" + resolution
+                                + "\",\"operator\":\"GT\",\"reference\":\"PREVIOUS_CLOSE\"",
+                        "BUY")
+                .replace(
+                        "{\"schemaVersion\":\"basic-compiled-plan.v2\"",
+                        "{\"schemaVersion\":\"basic-compiled-plan.v2\","
+                                + "\"elementCatalogVersion\":\"basic-elements:2026-08-08\"")
+                .replace(
+                        "\"allocation\":\"EQUAL\",\"orderType\":\"MARKET\",\"side\":\"BUY\"",
+                        "\"allocation\":\"EQUAL\",\"orderType\":\"MARKET\","
+                                + "\"timeInForce\":\"DAY\",\"side\":\"BUY\","
+                                + "\"orderPercent\":\"25\",\"executionMode\":\"대기 후 재진입\","
+                                + "\"waitMode\":\"N봉 이후\",\"waitInterval\":\"2\","
+                                + "\"maxExecutions\":\"3\"");
     }
 
     /**

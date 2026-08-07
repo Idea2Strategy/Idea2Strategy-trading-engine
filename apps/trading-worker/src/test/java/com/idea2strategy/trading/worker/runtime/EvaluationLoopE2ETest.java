@@ -155,6 +155,18 @@ class EvaluationLoopE2ETest {
     }
 
     @Test
+    void workerRestartRestoresTheOneShotExecutionLimitFromCanonicalIntents() {
+        runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
+        assertEquals(1, runtime.feed(event(1, "84")).size());
+
+        runtime.stop(BOT, "WORKER_RESTART");
+        runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
+
+        assertTrue(runtime.feed(eventAt(2, "83", EVENT_AT.plusSeconds(60))).isEmpty());
+        assertEquals(1, count("select count(*) from trading.order_intents where bot_id = ?", BOT));
+    }
+
+    @Test
     void aDirectPriceBlockTradesFromCompletedMarketBarsWithoutRsi() {
         runtime.start(directPricePlan(), PreparedWarmup.none(),
                 EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));

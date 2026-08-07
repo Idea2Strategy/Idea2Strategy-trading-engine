@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -70,6 +71,11 @@ public final class BasicPlanInterpreter {
     private static final String LOAD_FEATURE = "LOAD_FEATURE";
     private static final String COMPARE = "COMPARE";
     private static final String EMIT_ORDER_CANDIDATE = "EMIT_ORDER_CANDIDATE";
+    private static final String PRODUCTION_CATALOG_VERSION = "basic-elements:2026-08-08";
+    private static final Set<String> PRODUCTION_RESOLUTIONS = Set.of("30m", "1h", "4h", "1d");
+    private static final Set<String> EXECUTION_MODES = Set.of(
+            "1회만", "주기마다", "대기 후 재진입", "대기 후 재실행");
+    private static final Set<String> WAIT_MODES = Set.of("조건 재충족", "N봉 이후", "N거래일 이후");
     private static final MathContext MATH = new MathContext(18, RoundingMode.HALF_UP);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -91,10 +97,16 @@ public final class BasicPlanInterpreter {
                     + PLAN_SCHEMA_VERSION + " nor " + MULTI_CONTAINER_PLAN_SCHEMA_VERSION);
         }
 
-        CompiledContainer planWide = perFlow ? null : container(root, "plan");
+        JsonNode catalogVersionNode = root.get("elementCatalogVersion");
+        boolean productionCatalog = catalogVersionNode != null
+                && catalogVersionNode.isTextual()
+                && PRODUCTION_CATALOG_VERSION.equals(catalogVersionNode.asText());
+        CompiledContainer planWide = perFlow ? null : container(root, "plan", productionCatalog);
 
         List<BasicFlow> flows = new ArrayList<>();
         Map<String, String> partitionKeyByFlowKey = new LinkedHashMap<>();
+        Map<String, ExecutionPolicy> executionPolicyByFlowKey = new LinkedHashMap<>();
+        java.util.Set<String> productionResolutions = new java.util.LinkedHashSet<>();
         JsonNode partitions = object(root, "executionSnapshot").get("partitions");
         if (partitions == null || !partitions.isArray() || partitions.isEmpty()) {
             throw reject("executionSnapshot.partitions must be a non-empty array");
@@ -114,9 +126,23 @@ public final class BasicPlanInterpreter {
                 }
                 instrumentNodes.forEach(node -> instruments.add(UUID.fromString(node.asText())));
                 CompiledContainer container =
-                        perFlow ? container(flowNode, "flow " + flowKey) : planWide;
+                        perFlow ? container(flowNode, "flow " + flowKey, productionCatalog) : planWide;
                 flows.add(new BasicFlow(
                         flowKey, container.side(), instruments, container.conditionSteps()));
+                executionPolicyByFlowKey.put(flowKey, container.executionPolicy());
+                if (productionCatalog) {
+                    container.conditionStepsSource().stream()
+                            .map(PlanStep::arguments)
+                            .filter(Objects::nonNull)
+                            .map(arguments -> arguments.get("resolution"))
+                            .filter(Objects::nonNull)
+                            .forEach(value -> {
+                                if (!value.isTextual() || !PRODUCTION_RESOLUTIONS.contains(value.asText())) {
+                                    throw reject("production resolution must be one of " + PRODUCTION_RESOLUTIONS);
+                                }
+                                productionResolutions.add(value.asText());
+                            });
+                }
                 if (partitionKeyByFlowKey.put(flowKey, partitionKey) != null) {
                     throw reject("flow key " + flowKey + " is declared more than once");
                 }
@@ -125,7 +151,11 @@ public final class BasicPlanInterpreter {
         if (flows.isEmpty()) {
             throw reject("a compiled plan declares no flows");
         }
-        return new InterpretedPlan(flows, Map.copyOf(partitionKeyByFlowKey));
+        if (productionResolutions.size() > 1) {
+            throw reject("a production plan must use one resolution across all flows");
+        }
+        return new InterpretedPlan(
+                flows, Map.copyOf(partitionKeyByFlowKey), Map.copyOf(executionPolicyByFlowKey));
     }
 
     /**
@@ -136,7 +166,7 @@ public final class BasicPlanInterpreter {
      * {@code EMIT_ORDER_CANDIDATE} is not a condition — it is where the side and the allocation are
      * declared — so it is consumed here rather than evaluated per instrument.
      */
-    private CompiledContainer container(JsonNode owner, String description) {
+    private CompiledContainer container(JsonNode owner, String description, boolean productionCatalog) {
         List<PlanStep> steps = steps(owner);
         PlanStep terminal = steps.getLast();
         if (!EMIT_ORDER_CANDIDATE.equals(terminal.operation())) {
@@ -150,14 +180,78 @@ public final class BasicPlanInterpreter {
         for (PlanStep step : conditionSteps) {
             compiled.add(new BasicConditionStep(step.stepId(), evaluatorFor(step)));
         }
+        BasicOrderSide side = BasicOrderSide.valueOf(argument(terminal, "side"));
+        ExecutionPolicy executionPolicy = productionCatalog
+                ? new ExecutionPolicy(
+                        decimalPercent(terminal, "orderPercent"),
+                        argument(terminal, "executionMode"),
+                        argument(terminal, "waitMode"),
+                        positiveInteger(terminal, "waitInterval"),
+                        positiveInteger(terminal, "maxExecutions"))
+                : ExecutionPolicy.legacy();
+        if (productionCatalog && !validExecutionMode(side, executionPolicy.executionMode())) {
+            throw reject("executionMode " + executionPolicy.executionMode() + " is not valid for " + side);
+        }
         return new CompiledContainer(
-                BasicOrderSide.valueOf(argument(terminal, "side")),
+                side,
                 argument(terminal, "allocation"),
-                List.copyOf(compiled));
+                List.copyOf(compiled), List.copyOf(conditionSteps), executionPolicy);
+    }
+
+    private static boolean validExecutionMode(BasicOrderSide side, String mode) {
+        return side == BasicOrderSide.BUY
+                ? Set.of("1회만", "주기마다", "대기 후 재진입").contains(mode)
+                : Set.of("1회만", "대기 후 재실행").contains(mode);
     }
 
     private record CompiledContainer(
-            BasicOrderSide side, String allocation, List<BasicConditionStep> conditionSteps) {}
+            BasicOrderSide side,
+            String allocation,
+            List<BasicConditionStep> conditionSteps,
+            List<PlanStep> conditionStepsSource,
+            ExecutionPolicy executionPolicy) {}
+
+    public record ExecutionPolicy(
+            int orderPercent,
+            String executionMode,
+            String waitMode,
+            int waitInterval,
+            int maxExecutions) {
+
+        public ExecutionPolicy {
+            if (orderPercent < 1 || orderPercent > 100) {
+                throw reject("orderPercent must be between 1 and 100");
+            }
+            if (waitInterval < 1 || maxExecutions < 1) {
+                throw reject("waitInterval and maxExecutions must be positive integers");
+            }
+            executionMode = Objects.requireNonNull(executionMode, "executionMode");
+            waitMode = Objects.requireNonNull(waitMode, "waitMode");
+            if (!EXECUTION_MODES.contains(executionMode) || !WAIT_MODES.contains(waitMode)) {
+                throw reject("executionMode or waitMode is not supported");
+            }
+        }
+
+        static ExecutionPolicy legacy() {
+            return new ExecutionPolicy(100, "1회만", "조건 재충족", 1, 1);
+        }
+    }
+
+    private static int decimalPercent(PlanStep step, String name) {
+        try {
+            return new BigDecimal(argument(step, name)).intValueExact();
+        } catch (ArithmeticException exception) {
+            throw reject(name + " must be a whole percent");
+        }
+    }
+
+    private static int positiveInteger(PlanStep step, String name) {
+        try {
+            return Integer.parseInt(argument(step, name));
+        } catch (NumberFormatException exception) {
+            throw reject(name + " must be an integer");
+        }
+    }
 
     /**
      * The evaluator for one plan step.
@@ -714,14 +808,25 @@ public final class BasicPlanInterpreter {
      */
     public record InterpretedPlan(
             List<BasicFlow> flows,
-            Map<String, String> partitionKeyByFlowKey) {
+            Map<String, String> partitionKeyByFlowKey,
+            Map<String, ExecutionPolicy> executionPolicyByFlowKey) {
+
+        public InterpretedPlan(List<BasicFlow> flows, Map<String, String> partitionKeyByFlowKey) {
+            this(flows, partitionKeyByFlowKey, flows.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
+                    BasicFlow::flowId, ignored -> ExecutionPolicy.legacy())));
+        }
 
         public InterpretedPlan {
             flows = List.copyOf(Objects.requireNonNull(flows, "flows"));
             partitionKeyByFlowKey = Map.copyOf(
                     Objects.requireNonNull(partitionKeyByFlowKey, "partitionKeyByFlowKey"));
+            executionPolicyByFlowKey = Map.copyOf(
+                    Objects.requireNonNull(executionPolicyByFlowKey, "executionPolicyByFlowKey"));
             if (flows.isEmpty()) {
                 throw new IllegalArgumentException("an interpreted plan carries at least one flow");
+            }
+            if (!executionPolicyByFlowKey.keySet().equals(partitionKeyByFlowKey.keySet())) {
+                throw new IllegalArgumentException("every interpreted flow needs one execution policy");
             }
         }
 

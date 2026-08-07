@@ -38,6 +38,9 @@ public record OrderCandidateBatch(
      */
     public static final int ALLOCATION_SCHEMA_VERSION = 3;
 
+    /** The first schema version that can request a percentage of a held sell position. */
+    public static final int PARTIAL_POSITION_SCHEMA_VERSION = 4;
+
     public OrderCandidateBatch {
         if (schemaVersion < 1) {
             throw new IllegalArgumentException("schemaVersion must be positive");

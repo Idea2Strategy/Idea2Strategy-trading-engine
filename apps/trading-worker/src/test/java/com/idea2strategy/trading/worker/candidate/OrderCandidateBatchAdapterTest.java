@@ -92,7 +92,7 @@ class OrderCandidateBatchAdapterTest {
         // A version beyond the allocation one is refused even though it carries a complete scope,
         // because its meaning has not been agreed with the producer yet.
         OrderCandidateBatch source = new OrderCandidateBatch(
-                OrderCandidateBatch.ALLOCATION_SCHEMA_VERSION + 1,
+                OrderCandidateBatch.PARTIAL_POSITION_SCHEMA_VERSION + 1,
                 UUID.fromString("10000000-0000-0000-0000-000000000001"),
                 UUID.fromString("20000000-0000-0000-0000-000000000002"),
                 UUID.fromString("50000000-0000-0000-0000-000000000005"),
@@ -102,6 +102,21 @@ class OrderCandidateBatchAdapterTest {
                 List.of());
 
         assertThrows(IllegalArgumentException.class, () -> new OrderCandidateBatchAdapter().toDomain(source));
+    }
+
+    @Test
+    void carriesTheRequestedSellPercentageOfASchemaVersionFourCandidate() {
+        OrderCandidate candidate = OrderCandidate.partialHeldSell(
+                CANDIDATE, INSTRUMENT, FLOW, 40, null, null, List.of("EXIT"));
+        OrderCandidateBatch batch = new OrderCandidateBatch(
+                OrderCandidateBatch.PARTIAL_POSITION_SCHEMA_VERSION,
+                BATCH, EVALUATION, BOT, PARTITION, SOURCE_EVENT,
+                Instant.parse("2026-08-01T00:00:00Z"), List.of(candidate));
+
+        var translated = new OrderCandidateBatchAdapter().toDomain(batch)
+                .candidates().getFirst();
+
+        assertEquals(40, translated.requestedPositionPercent().orElseThrow());
     }
 
     /** A version 3 buy hands over its share and lets this service size it. */
