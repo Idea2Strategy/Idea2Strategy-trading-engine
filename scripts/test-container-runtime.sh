@@ -6,8 +6,17 @@ suffix="${platform##*/}"
 
 for application in market-gateway trading-worker; do
   image="idea2strategy/${application}:runtime-smoke-${suffix}"
+  cache_args=()
+  if [[ -n "${BUILDX_CACHE_SCOPE_PREFIX:-}" ]]; then
+    cache_scope="${BUILDX_CACHE_SCOPE_PREFIX}-${application}-${suffix}"
+    cache_args+=(
+      --cache-from "type=gha,scope=${cache_scope}"
+      --cache-to "type=gha,mode=max,scope=${cache_scope}"
+    )
+  fi
   docker buildx build \
     --platform "${platform}" \
+    "${cache_args[@]}" \
     --load \
     --tag "${image}" \
     --file "apps/${application}/Dockerfile" \
