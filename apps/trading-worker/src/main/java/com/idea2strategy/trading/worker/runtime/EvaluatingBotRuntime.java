@@ -496,7 +496,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             values.put("position.returnPercent", currentReturn.toPlainString());
             values.put("position.peakReturnPercent", peakReturn.toPlainString());
             values.put("position.drawdownPercent", drawdown.toPlainString());
-            for (String resolution : List.of("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w")) {
+            for (String resolution : List.of("1m", "30m", "1h", "4h", "1d")) {
                 if (Boolean.parseBoolean(marketValues.getOrDefault("bar.closed." + resolution, "false"))) {
                     closedBars.merge(resolution, 1L, Long::sum);
                 }

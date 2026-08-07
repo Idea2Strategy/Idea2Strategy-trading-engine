@@ -44,6 +44,7 @@ public final class MarketEvaluationCoordinator {
         values.put("closed1h", flag(candles, MarketTimeframe.ONE_HOUR));
         values.put("closed4h", flag(candles, MarketTimeframe.FOUR_HOURS));
         values.put("closed1d", flag(candles, MarketTimeframe.ONE_DAY));
+        candles.forEach(candle -> putCandle(values, candle));
         String material = instrumentId + ":" + boundary;
         String stableId = UUID.nameUUIDFromBytes(material.getBytes(StandardCharsets.UTF_8)).toString();
         return new MarketEventEnvelope(
@@ -66,5 +67,19 @@ public final class MarketEvaluationCoordinator {
         return candles.stream().anyMatch(candle -> candle.timeframe() == timeframe)
                 ? BigDecimal.ONE
                 : BigDecimal.ZERO;
+    }
+
+    private static void putCandle(Map<String, BigDecimal> values, MarketCandle candle) {
+        String suffix = switch (candle.timeframe()) {
+            case THIRTY_MINUTES -> "30m";
+            case ONE_HOUR -> "1h";
+            case FOUR_HOURS -> "4h";
+            case ONE_DAY -> "1d";
+        };
+        values.put("open" + suffix, candle.open());
+        values.put("high" + suffix, candle.high());
+        values.put("low" + suffix, candle.low());
+        values.put("close" + suffix, candle.close());
+        values.put("volume" + suffix, candle.volume());
     }
 }

@@ -1,6 +1,7 @@
 package com.idea2strategy.trading.market.candle;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import com.idea2strategy.trading.messaging.market.MarketCandle;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
@@ -34,6 +35,10 @@ class MarketEvaluationCoordinatorTest {
         assertEquals(BigDecimal.ONE, first.values().get("closed4h"));
         assertEquals(BigDecimal.ZERO, first.values().get("closed1d"));
         assertEquals(new BigDecimal("103"), first.values().get("close"));
+        assertEquals(new BigDecimal("100"), first.values().get("open30m"));
+        assertEquals(new BigDecimal("104"), first.values().get("high1h"));
+        assertEquals(new BigDecimal("30"), first.values().get("volume4h"));
+        assertFalse(first.values().containsKey("open1d"));
     }
 
     private static MarketCandle candle(

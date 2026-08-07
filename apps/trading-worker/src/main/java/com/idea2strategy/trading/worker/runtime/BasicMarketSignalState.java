@@ -4,7 +4,6 @@ import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
 import com.idea2strategy.trading.messaging.market.MarketEventType;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
@@ -20,21 +19,19 @@ import java.util.Map;
 /**
  * Builds the deterministic rolling bar inputs consumed by the complete Basic block catalog.
  *
- * <p>The market gateway supplies completed one-minute bars. This state keeps those bars and rolls
- * them into every resolution the Basic editor exposes. A larger resolution only reports
- * {@code bar.closed.<resolution>=true} when a complete aggregate becomes available; the interpreter
- * therefore never trades from a partially formed candle.
+ * <p>The market gateway supplies one evaluation event containing every strategy candle finalized
+ * at a 30-minute boundary. This state keeps only 30m, 1h, 4h, and 1d candles, so display-only
+ * minute bars can never trigger strategy evaluation.
  */
 final class BasicMarketSignalState {
 
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     private static final int MAX_BARS = 180;
     private static final List<Resolution> RESOLUTIONS = List.of(
-            new Resolution("1m", 1), new Resolution("3m", 3),
-            new Resolution("5m", 5), new Resolution("15m", 15),
-            new Resolution("30m", 30), new Resolution("1h", 60),
-            new Resolution("4h", 240), new Resolution("1d", 1_440),
-            new Resolution("1w", 10_080));
+            new Resolution("30m", "closed30m"),
+            new Resolution("1h", "closed1h"),
+            new Resolution("4h", "closed4h"),
+            new Resolution("1d", "closed1d"));
 
     private final Map<String, Series> series = new LinkedHashMap<>();
     private LocalDate tradingDay;
@@ -57,7 +54,7 @@ final class BasicMarketSignalState {
         if (newTradingDay) {
             tradingDay = eventDay;
             tradingDayIndex++;
-            sessionOpen = first(event.values(), "open", "price", "close");
+            sessionOpen = first(event.values(), "open30m", "open", "price", "close");
         }
         if (sessionOpen != null) {
             values.put("session.open", sessionOpen.toPlainString());
@@ -74,18 +71,31 @@ final class BasicMarketSignalState {
         boolean sessionClose = marketTime.getHour() == 16 && marketTime.getMinute() < 2;
         values.put("session.close", Boolean.toString(sessionClose));
 
-        if (event.eventType() == MarketEventType.BAR_1M) {
-            Bar bar = Bar.from(event);
-            if (bar != null) {
-                for (Series item : series.values()) {
-                    if (item.accept(bar, event.occurredAt())) {
+        if (event.eventType() == MarketEventType.MARKET_EVALUATION_READY) {
+            for (Series item : series.values()) {
+                if (flag(event.values(), item.resolution.closedFlag())) {
+                    Bar bar = Bar.from(event, item.resolution.code());
+                    if (bar != null) {
+                        item.append(bar);
                         values.put("bar.closed." + item.resolution.code(), "true");
                     }
                 }
             }
         }
         series.forEach((resolution, item) -> item.publish(values));
+        publishLegacyOneMinuteAlias(values);
         return Map.copyOf(values);
+    }
+
+    private void publishLegacyOneMinuteAlias(Map<String, String> values) {
+        Series thirtyMinute = series.get("30m");
+        values.put("bar.closed.1m", values.get("bar.closed.30m"));
+        thirtyMinute.publish(values, "1m");
+    }
+
+    private static boolean flag(Map<String, BigDecimal> values, String key) {
+        BigDecimal value = values.get(key);
+        return value != null && value.signum() != 0;
     }
 
     private static BigDecimal first(Map<String, BigDecimal> values, String... keys) {
@@ -164,50 +174,14 @@ final class BasicMarketSignalState {
         return LocalDate.of(year, month, day);
     }
 
-    private record Resolution(String code, int minutes) {
-        long bucket(Instant occurredAt) {
-            ZonedDateTime marketTime = occurredAt.atZone(MARKET_ZONE);
-            if ("1d".equals(code)) {
-                return marketTime.toLocalDate().toEpochDay();
-            }
-            if ("1w".equals(code)) {
-                LocalDate monday = marketTime.toLocalDate()
-                        .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-                return monday.toEpochDay();
-            }
-            return Math.floorDiv(occurredAt.getEpochSecond(), minutes * 60L);
-        }
-    }
+    private record Resolution(String code, String closedFlag) {}
 
     private static final class Series {
         private final Resolution resolution;
         private final Deque<Bar> completed = new ArrayDeque<>();
-        private Long bucket;
-        private Bar forming;
 
         private Series(Resolution resolution) {
             this.resolution = resolution;
-        }
-
-        private boolean accept(Bar bar, Instant occurredAt) {
-            if (resolution.minutes() == 1) {
-                append(bar);
-                return true;
-            }
-            long nextBucket = resolution.bucket(occurredAt);
-            if (bucket == null) {
-                bucket = nextBucket;
-                forming = bar;
-                return false;
-            }
-            if (bucket == nextBucket) {
-                forming = forming.merge(bar);
-                return false;
-            }
-            append(forming);
-            bucket = nextBucket;
-            forming = bar;
-            return true;
         }
 
         private void append(Bar bar) {
@@ -218,10 +192,13 @@ final class BasicMarketSignalState {
         }
 
         private void publish(Map<String, String> values) {
+            publish(values, resolution.code());
+        }
+
+        private void publish(Map<String, String> values, String suffix) {
             if (completed.isEmpty()) {
                 return;
             }
-            String suffix = resolution.code();
             values.put("closes." + suffix, join(completed, Value.CLOSE));
             values.put("opens." + suffix, join(completed, Value.OPEN));
             values.put("highs." + suffix, join(completed, Value.HIGH));
@@ -249,21 +226,19 @@ final class BasicMarketSignalState {
             BigDecimal open, BigDecimal high, BigDecimal low,
             BigDecimal close, BigDecimal volume) {
 
-        static Bar from(MarketEventEnvelope event) {
-            BigDecimal close = first(event.values(), "close", "price");
+        static Bar from(MarketEventEnvelope event, String suffix) {
+            BigDecimal close = event.values().get("close" + suffix);
+            if (close == null && "30m".equals(suffix)) {
+                close = event.values().get("close");
+            }
             if (close == null) {
                 return null;
             }
-            BigDecimal open = first(event.values(), "open", "price", "close");
-            BigDecimal high = first(event.values(), "high", "price", "close");
-            BigDecimal low = first(event.values(), "low", "price", "close");
-            BigDecimal volume = event.values().getOrDefault("volume", BigDecimal.ZERO);
+            BigDecimal open = first(event.values(), "open" + suffix, "close" + suffix);
+            BigDecimal high = first(event.values(), "high" + suffix, "close" + suffix);
+            BigDecimal low = first(event.values(), "low" + suffix, "close" + suffix);
+            BigDecimal volume = event.values().getOrDefault("volume" + suffix, BigDecimal.ZERO);
             return new Bar(open, high, low, close, volume);
-        }
-
-        Bar merge(Bar next) {
-            return new Bar(open, high.max(next.high), low.min(next.low), next.close,
-                    volume.add(next.volume));
         }
     }
 }
