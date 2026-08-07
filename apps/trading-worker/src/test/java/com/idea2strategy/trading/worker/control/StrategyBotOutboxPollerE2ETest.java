@@ -53,7 +53,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(properties = {
         "spring.flyway.enabled=true",
         "spring.flyway.table=flyway_schema_history_private",
-        "spring.flyway.baseline-on-migrate=true"
+        "spring.flyway.baseline-on-migrate=true",
+        // This test drives its own deterministic poller and clock.
+        "trading.bot-control.transport.enabled=false"
 })
 class StrategyBotOutboxPollerE2ETest {
 
