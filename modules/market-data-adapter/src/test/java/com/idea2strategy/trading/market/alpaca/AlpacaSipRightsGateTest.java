@@ -62,18 +62,20 @@ class AlpacaSipRightsGateTest {
     }
 
     @Test
-    void subscriptionIsActiveOnlyAfterTheEntireUniverseIsApproved() {
+    void subscriptionIsActiveOnlyAfterTheDesiredDisplaySymbolsAreApproved() {
         AtomicInteger credentialLoads = new AtomicInteger();
         RecordingTransport transport = new RecordingTransport();
         ProviderRightsGate gate = new ProviderRightsGate(
                 () -> new ProviderRightsEvidence("alpaca", "sip", NOW.minusSeconds(1), NOW.plusSeconds(60)),
                 Clock.fixed(NOW, ZoneOffset.UTC));
         AlpacaSipSubscriptionManager manager = manager(gate, credentialLoads, transport);
+        manager.replaceTradeSubscriptions(List.of("AAPL", "MSFT"));
 
         manager.onConnected();
         manager.onAuthenticationApproved();
 
-        assertThrows(IllegalStateException.class, () -> manager.onSubscriptionApproved(List.of("AAPL")));
+        manager.onSubscriptionApproved(List.of("AAPL"));
+        assertEquals(false, manager.isSubscribed());
         manager.onSubscriptionApproved(List.of("AAPL", "MSFT"));
         assertEquals(true, manager.isSubscribed());
     }
@@ -101,6 +103,9 @@ class AlpacaSipRightsGateTest {
         }
 
         @Override
-        public void subscribe(List<String> symbols) {}
+        public void subscribeTrades(List<String> symbols) {}
+
+        @Override
+        public void unsubscribeTrades(List<String> symbols) {}
     }
 }

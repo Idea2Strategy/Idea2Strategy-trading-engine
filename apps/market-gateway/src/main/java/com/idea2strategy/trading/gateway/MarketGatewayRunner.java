@@ -19,6 +19,9 @@ import com.idea2strategy.trading.market.alpaca.UnsupportedInstrumentException;
 import com.idea2strategy.trading.market.availability.MarketDataAvailabilityResult;
 import com.idea2strategy.trading.market.availability.MarketDataAvailabilityStatus;
 import com.idea2strategy.trading.market.availability.MarketDataDegradationReason;
+import com.idea2strategy.trading.market.display.DisplayTradeSubscriptionSource;
+import com.idea2strategy.trading.market.display.LatestTradeCoalescer;
+import com.idea2strategy.trading.market.display.RedisDisplayPricePublisher;
 import com.idea2strategy.trading.market.redis.MarketEventPublishResult;
 import com.idea2strategy.trading.market.redis.RedisMarketEventPublisher;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
@@ -56,6 +59,9 @@ public final class MarketGatewayRunner implements SmartLifecycle {
     private final AlpacaMarketEventNormalizer normalizer;
     private final MarketEventOrderingProcessor orderingProcessor;
     private final RedisMarketEventPublisher publisher;
+    private final LatestTradeCoalescer tradeCoalescer;
+    private final RedisDisplayPricePublisher displayPricePublisher;
+    private final DisplayTradeSubscriptionSource displaySubscriptions;
     private final FileReadinessMarker readinessMarker;
     private final ReconnectBackoff backoff;
     private final Clock clock;
@@ -68,6 +74,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
     });
     private final AtomicInteger failedAttempts = new AtomicInteger();
     private final AtomicReference<WebSocket> activeSocket = new AtomicReference<>();
+    private final AtomicReference<AlpacaSipSubscriptionManager> activeSubscription = new AtomicReference<>();
     private final Map<String, LongAdder> unpublishedFrames = new ConcurrentHashMap<>();
     private final Map<UUID, Long> latestSequenceByInstrument = new ConcurrentHashMap<>();
     private final Set<UUID> instrumentsWithSequenceGap = ConcurrentHashMap.newKeySet();
@@ -83,6 +90,9 @@ public final class MarketGatewayRunner implements SmartLifecycle {
             AlpacaMarketEventNormalizer normalizer,
             MarketEventOrderingProcessor orderingProcessor,
             RedisMarketEventPublisher publisher,
+            LatestTradeCoalescer tradeCoalescer,
+            RedisDisplayPricePublisher displayPricePublisher,
+            DisplayTradeSubscriptionSource displaySubscriptions,
             FileReadinessMarker readinessMarker,
             ReconnectBackoff backoff,
             Clock clock) {
@@ -95,6 +105,9 @@ public final class MarketGatewayRunner implements SmartLifecycle {
         this.normalizer = Objects.requireNonNull(normalizer, "normalizer");
         this.orderingProcessor = Objects.requireNonNull(orderingProcessor, "orderingProcessor");
         this.publisher = Objects.requireNonNull(publisher, "publisher");
+        this.tradeCoalescer = Objects.requireNonNull(tradeCoalescer, "tradeCoalescer");
+        this.displayPricePublisher = Objects.requireNonNull(displayPricePublisher, "displayPricePublisher");
+        this.displaySubscriptions = Objects.requireNonNull(displaySubscriptions, "displaySubscriptions");
         this.readinessMarker = Objects.requireNonNull(readinessMarker, "readinessMarker");
         this.backoff = Objects.requireNonNull(backoff, "backoff");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -106,6 +119,8 @@ public final class MarketGatewayRunner implements SmartLifecycle {
         credentialsProvider.load();
         running = true;
         log.info("market-gateway connecting to {} for {} symbols", endpoint, universe.symbols().size());
+        scheduler.scheduleAtFixedRate(this::flushDisplayPrices, 250, 250, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(this::reconcileDisplaySubscriptions, 0, 1, TimeUnit.SECONDS);
         scheduler.execute(this::connect);
     }
 
@@ -151,6 +166,26 @@ public final class MarketGatewayRunner implements SmartLifecycle {
         scheduler.schedule(this::connect, delay.toMillis(), TimeUnit.MILLISECONDS);
     }
 
+    private void flushDisplayPrices() {
+        try {
+            tradeCoalescer.flush().forEach(displayPricePublisher::publish);
+        } catch (RuntimeException failure) {
+            log.error("display price coalescing failed", failure);
+        }
+    }
+
+    private void reconcileDisplaySubscriptions() {
+        AlpacaSipSubscriptionManager manager = activeSubscription.get();
+        if (manager == null || !manager.isAuthenticated()) {
+            return;
+        }
+        try {
+            manager.replaceTradeSubscriptions(displaySubscriptions.desiredSymbols(clock.instant()));
+        } catch (RuntimeException failure) {
+            log.error("display trade subscription reconciliation failed", failure);
+        }
+    }
+
     private void stopForRightsFailure(ProviderRightsUnavailableException failure) {
         log.error("Alpaca {} rights are no longer verified; the gateway stays down until restarted "
                 + "with current rights evidence", feed.eventValue(), failure);
@@ -174,6 +209,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
                     credentialsProvider,
                     AlpacaSipWebSocketTransport.connected(webSocket),
                     feed);
+            activeSubscription.set(subscription);
             webSocket.request(1);
         }
 
@@ -217,39 +253,29 @@ public final class MarketGatewayRunner implements SmartLifecycle {
         private void dispatch(AlpacaSipInboundMessage message) {
             switch (message) {
                 case AlpacaSipInboundMessage.Connected ignored -> subscription.onConnected();
-                case AlpacaSipInboundMessage.Authenticated ignored -> subscription.onAuthenticationApproved();
-                case AlpacaSipInboundMessage.SubscriptionConfirmed confirmed -> {
-                    subscription.onSubscriptionApproved(confirmed.barSymbols());
+                case AlpacaSipInboundMessage.Authenticated ignored -> {
+                    subscription.onAuthenticationApproved();
                     failedAttempts.set(0);
                     readinessMarker.markReady();
-                    log.info("Alpaca {} subscription active for {} symbols",
-                            feed.eventValue(), confirmed.barSymbols().size());
+                    reconcileDisplaySubscriptions();
+                }
+                case AlpacaSipInboundMessage.SubscriptionConfirmed confirmed -> {
+                    subscription.onSubscriptionApproved(confirmed.tradeSymbols());
+                    failedAttempts.set(0);
+                    readinessMarker.markReady();
+                    log.info("Alpaca {} display trade subscription active for {} symbols",
+                            feed.eventValue(), confirmed.tradeSymbols().size());
                 }
                 case AlpacaSipInboundMessage.ProviderError error -> {
                     log.warn("Alpaca {} error {}: {}", feed.eventValue(), error.code(), error.message());
                     readinessMarker.markNotReady();
                     publishUnavailable(MarketDataDegradationReason.PROVIDER_DISCONNECTED);
                 }
-                case AlpacaSipInboundMessage.MinuteBar bar -> publishBar(bar);
+                case AlpacaSipInboundMessage.TradeTick tick -> tradeCoalescer.accept(tick);
                 case AlpacaSipInboundMessage.UnsupportedFrame unsupported ->
                         unpublishedFrames.computeIfAbsent(unsupported.frameType(), key -> new LongAdder())
                                 .increment();
             }
-        }
-
-        private void publishBar(AlpacaSipInboundMessage.MinuteBar bar) {
-            MarketEventEnvelope envelope;
-            try {
-                envelope = normalizer.normalize(bar.input());
-            } catch (UnsupportedInstrumentException exception) {
-                unpublishedFrames.computeIfAbsent("unsupported-instrument", key -> new LongAdder()).increment();
-                return;
-            }
-            MarketEventHandlingResult handling = orderingProcessor.process(envelope);
-            MarketEventPublishResult result = publisher.publish(handling);
-            publishAvailability(envelope, handling);
-            log.debug("bar {} {} handling={} publish={}",
-                    envelope.instrumentId(), envelope.occurredAt(), handling.status(), result.status());
         }
 
         private void handleDisconnect(String reason) {
@@ -259,6 +285,7 @@ public final class MarketGatewayRunner implements SmartLifecycle {
                 manager.onDisconnected();
             }
             activeSocket.set(null);
+            activeSubscription.compareAndSet(subscription, null);
             publishUnavailable(MarketDataDegradationReason.PROVIDER_DISCONNECTED);
             if (!unpublishedFrames.isEmpty()) {
                 log.info("Alpaca {} frames received without a publishing path this connection: {}",

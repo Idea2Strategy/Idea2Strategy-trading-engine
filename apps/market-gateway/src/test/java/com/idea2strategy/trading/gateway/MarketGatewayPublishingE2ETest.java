@@ -9,8 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.idea2strategy.trading.market.alpaca.ProviderRightsUnavailableException;
 import com.idea2strategy.trading.market.availability.MarketDataAvailabilityStatus;
 import com.idea2strategy.trading.market.redis.RedisMarketEventPublisher;
-import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
-import com.idea2strategy.trading.messaging.market.MarketEventType;
+import io.lettuce.core.RedisClient;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
@@ -44,9 +43,10 @@ import org.testcontainers.utility.DockerImageName;
 @Testcontainers(disabledWithoutDocker = true)
 class MarketGatewayPublishingE2ETest {
     private static final UUID AAPL_ID = UUID.fromString("8a35e6b5-cf84-4f63-920d-57c1f1b95df0");
-    private static final String BAR_FRAME =
-            "[{\"T\":\"b\",\"S\":\"AAPL\",\"o\":210.10,\"h\":210.25,\"l\":210.05,"
-                    + "\"c\":210.20,\"v\":2500,\"t\":\"2026-07-31T14:30:00Z\"}]";
+    private static final String TRADE_FRAME =
+            "[{\"T\":\"t\",\"S\":\"AAPL\",\"i\":529835250,\"x\":\"V\","
+                    + "\"p\":210.20,\"s\":20,\"c\":[\"@\"],"
+                    + "\"t\":\"2026-07-31T14:30:00.123456Z\",\"z\":\"C\"}]";
 
     @Container
     static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine"))
@@ -56,45 +56,32 @@ class MarketGatewayPublishingE2ETest {
     Path configDir;
 
     @Test
-    void publishesRealAlpacaBarsToRedisAndSurvivesADroppedConnection() throws Exception {
+    void publishesCoalescedTradesToDisplayRedisAndSurvivesADroppedConnection() throws Exception {
         FakeAlpacaSipServer server = new FakeAlpacaSipServer(1);
         Path mapping = mapping();
         Path readinessFile = readinessFile(mapping);
         server.startAndAwait();
         try {
+            String redisUri = "redis://" + REDIS.getHost() + ":" + REDIS.getMappedPort(6379);
+            try (RedisClient client = RedisClient.create(redisUri);
+                    var connection = client.connect()) {
+                connection.sync().zadd(
+                        "{test-e2e:market}:display:subscription-leases",
+                        Instant.now().plusSeconds(60).toEpochMilli(),
+                        "test-connection|AAPL");
+            }
             try (ConfigurableApplicationContext context = gateway(server.port(), validRights(), mapping)) {
-                RedisMarketEventPublisher publisher = context.getBean(RedisMarketEventPublisher.class);
-
-                waitUntil(() -> publisher.streamLength() >= 1, Duration.ofSeconds(30));
                 waitUntil(() -> Files.isRegularFile(readinessFile), Duration.ofSeconds(10));
-                Thread.sleep(500);
-
-                assertEquals(1, publisher.streamLength());
-                MarketEventEnvelope latest =
-                        publisher.findLatest(AAPL_ID, MarketEventType.BAR_1M).orElseThrow();
-                assertEquals("bar-20260731T143000Z", latest.providerEventId());
-                assertEquals("ALPACA", latest.provider());
-                assertEquals("SIP", latest.feed());
-                assertEquals(Instant.parse("2026-07-31T14:30:00Z"), latest.occurredAt());
-                assertEquals(Instant.parse("2026-07-31T14:30:00Z").getEpochSecond() / 60, latest.sequence());
-                assertEquals(
-                        Map.of(
-                                "open", new BigDecimal("210.10"),
-                                "high", new BigDecimal("210.25"),
-                                "low", new BigDecimal("210.05"),
-                                "close", new BigDecimal("210.20"),
-                                "volume", new BigDecimal("2500")),
-                        latest.values());
-                var availability = publisher.findAvailability(AAPL_ID).orElseThrow();
-                assertEquals(latest.sequence(), availability.marketSequence());
-                assertEquals(MarketDataAvailabilityStatus.AVAILABLE, availability.status());
-                assertTrue(availability.evaluationAllowed());
+                try (RedisClient client = RedisClient.create(redisUri); var connection = client.connect()) {
+                    waitUntil(() -> "210.20".equals(connection.sync().hget(
+                            "{test-e2e:market}:display:latest:" + AAPL_ID, "price")), Duration.ofSeconds(30));
+                }
 
                 assertEquals(2, server.connections.get());
                 assertTrue(server.received.stream().anyMatch(frame ->
                         frame.contains("\"action\":\"auth\"") && frame.contains("\"key\":\"test-key\"")));
                 assertTrue(server.received.stream().anyMatch(frame ->
-                        frame.contains("\"action\":\"subscribe\"") && frame.contains("\"bars\":[\"AAPL\"]")));
+                        frame.contains("\"action\":\"subscribe\"") && frame.contains("\"trades\":[\"AAPL\"]")));
             }
             assertFalse(Files.exists(readinessFile));
         } finally {
@@ -103,20 +90,16 @@ class MarketGatewayPublishingE2ETest {
     }
 
     @Test
-    void explicitIexFallbackPublishesTruthfulIexEvents() throws Exception {
+    void explicitIexFallbackAuthenticatesWithoutCreatingASecondConnection() throws Exception {
         FakeAlpacaSipServer server = new FakeAlpacaSipServer(0);
         Path mapping = mapping();
         server.startAndAwait();
         try {
             Path rights = validRights("iex");
             try (ConfigurableApplicationContext context = gateway(server.port(), rights, mapping, "iex")) {
-                RedisMarketEventPublisher publisher = context.getBean(RedisMarketEventPublisher.class);
-
-                waitUntil(() -> publisher.streamLength() >= 1, Duration.ofSeconds(30));
-                MarketEventEnvelope latest =
-                        publisher.findLatest(AAPL_ID, MarketEventType.BAR_1M).orElseThrow();
-                assertEquals("ALPACA", latest.provider());
-                assertEquals("IEX", latest.feed());
+                waitUntil(() -> server.received.stream().anyMatch(frame -> frame.contains("\"action\":\"auth\"")),
+                        Duration.ofSeconds(30));
+                assertEquals(1, server.connections.get());
             }
         } finally {
             server.stop();
@@ -190,7 +173,8 @@ class MarketGatewayPublishingE2ETest {
     private static String[] baseProperties(int port, Path rights, Path mapping, Path receipt) {
         return new String[] {
             "market-gateway.redis-uri=redis://" + REDIS.getHost() + ":" + REDIS.getMappedPort(6379),
-            "market-gateway.redis-key-prefix=test:" + UUID.randomUUID(),
+            "market-gateway.redis-key-prefix=test-e2e",
+            "market-gateway.strategy-candles-enabled=false",
             "market-gateway.instrument-mapping-path=" + mapping,
             "market-gateway.rights-evidence-path=" + rights,
             "market-gateway.materialization-receipt-path=" + receipt,
@@ -337,8 +321,8 @@ class MarketGatewayPublishingE2ETest {
             } else if (message.contains("\"action\":\"subscribe\"")) {
                 connection.send("[{\"T\":\"subscription\",\"trades\":[\"AAPL\"],"
                         + "\"quotes\":[\"AAPL\"],\"bars\":[\"AAPL\"]}]");
-                connection.send(BAR_FRAME);
-                connection.send(BAR_FRAME);
+                connection.send(TRADE_FRAME);
+                connection.send(TRADE_FRAME);
             }
         }
 

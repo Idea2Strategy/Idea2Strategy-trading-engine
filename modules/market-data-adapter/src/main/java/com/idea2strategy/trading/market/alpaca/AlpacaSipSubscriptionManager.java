@@ -2,7 +2,11 @@ package com.idea2strategy.trading.market.alpaca;
 
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 
 public final class AlpacaSipSubscriptionManager {
     private final ApprovedSymbolUniverse universe;
@@ -13,8 +17,8 @@ public final class AlpacaSipSubscriptionManager {
 
     private boolean connected;
     private boolean authenticated;
-    private boolean subscriptionRequested;
-    private boolean subscriptionApproved;
+    private Set<String> desiredTradeSymbols = Set.of();
+    private Set<String> activeTradeSymbols = Set.of();
 
     public AlpacaSipSubscriptionManager(
             ApprovedSymbolUniverse universe,
@@ -43,40 +47,61 @@ public final class AlpacaSipSubscriptionManager {
         transport.authenticate(credentials);
         connected = true;
         authenticated = false;
-        subscriptionRequested = false;
-        subscriptionApproved = false;
+        activeTradeSymbols = Set.of();
     }
 
     public synchronized void onAuthenticationApproved() {
         if (!connected) {
             throw new IllegalStateException("SIP connection is not active");
         }
+        if (authenticated) {
+            return;
+        }
         rightsGate.requireCurrentAlpacaRights(feed);
         authenticated = true;
-        if (!subscriptionRequested) {
-            transport.subscribe(universe.symbols());
-            subscriptionRequested = true;
+        if (!desiredTradeSymbols.isEmpty()) {
+            transport.subscribeTrades(List.copyOf(desiredTradeSymbols));
         }
     }
 
     public synchronized void onSubscriptionApproved(Collection<String> approvedSymbols) {
-        if (!authenticated || !subscriptionRequested) {
-            throw new IllegalStateException("SIP subscription was not requested");
+        if (!authenticated) {
+            throw new IllegalStateException("SIP connection is not authenticated");
         }
         rightsGate.requireCurrentAlpacaRights(feed);
-        ApprovedSymbolUniverse approved = new ApprovedSymbolUniverse(approvedSymbols);
-        if (!new HashSet<>(universe.symbols()).equals(new HashSet<>(approved.symbols()))) {
+        Set<String> approved = normalize(approvedSymbols);
+        if (!new HashSet<>(universe.symbols()).containsAll(approved)) {
             throw new IllegalStateException(
-                    "Alpaca " + feed.eventValue() + " did not approve the entire configured universe");
+                    "Alpaca " + feed.eventValue() + " approved a trade symbol outside the configured universe");
         }
-        subscriptionApproved = true;
+        activeTradeSymbols = approved;
+    }
+
+    /** Reconciles chart demand without opening another Alpaca WebSocket connection. */
+    public synchronized void replaceTradeSubscriptions(Collection<String> symbols) {
+        Set<String> desired = normalize(symbols);
+        if (!new HashSet<>(universe.symbols()).containsAll(desired)) {
+            throw new IllegalArgumentException("trade subscription contains a symbol outside the approved universe");
+        }
+        Set<String> additions = new LinkedHashSet<>(desired);
+        additions.removeAll(desiredTradeSymbols);
+        Set<String> removals = new LinkedHashSet<>(desiredTradeSymbols);
+        removals.removeAll(desired);
+        desiredTradeSymbols = Set.copyOf(desired);
+        if (authenticated) {
+            if (!additions.isEmpty()) {
+                transport.subscribeTrades(List.copyOf(additions));
+            }
+            if (!removals.isEmpty()) {
+                transport.unsubscribeTrades(List.copyOf(removals));
+            }
+        }
     }
 
     public synchronized void onDisconnected() {
         connected = false;
         authenticated = false;
-        subscriptionRequested = false;
-        subscriptionApproved = false;
+        activeTradeSymbols = Set.of();
     }
 
     public synchronized boolean isAuthenticated() {
@@ -84,6 +109,22 @@ public final class AlpacaSipSubscriptionManager {
     }
 
     public synchronized boolean isSubscribed() {
-        return subscriptionApproved;
+        return authenticated && activeTradeSymbols.equals(desiredTradeSymbols);
+    }
+
+    public synchronized Set<String> desiredTradeSymbols() {
+        return desiredTradeSymbols;
+    }
+
+    private static Set<String> normalize(Collection<String> symbols) {
+        Objects.requireNonNull(symbols, "symbols");
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        for (String symbol : symbols) {
+            if (symbol == null || symbol.isBlank()) {
+                throw new IllegalArgumentException("symbol must not be blank");
+            }
+            normalized.add(symbol.trim().toUpperCase(Locale.ROOT));
+        }
+        return Set.copyOf(normalized);
     }
 }

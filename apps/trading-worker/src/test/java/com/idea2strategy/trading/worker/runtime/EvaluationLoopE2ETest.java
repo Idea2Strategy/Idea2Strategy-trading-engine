@@ -339,7 +339,7 @@ class EvaluationLoopE2ETest {
 
         MarketEventEnvelope other = new MarketEventEnvelope(
                 "market-other", 1, UUID.fromString("c2000000-0000-4000-8000-0000000000ff"),
-                "ALPACA", "SIP", MarketEventType.BAR_1M, "p-other", EVENT_AT, EVENT_AT,
+                "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY, "p-other", EVENT_AT, EVENT_AT,
                 99, 0, null, Map.of("close", new BigDecimal("84")));
 
         assertTrue(runtime.feed(other).isEmpty());
@@ -388,7 +388,7 @@ class EvaluationLoopE2ETest {
 
     private MarketEventEnvelope eventAt(long sequence, String close, Instant observedAt) {
         return new MarketEventEnvelope(
-                "market-" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.BAR_1M,
+                "market-" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY,
                 "provider-" + sequence, observedAt, observedAt, sequence, 0, null,
                 Map.of("close", new BigDecimal(close)));
     }

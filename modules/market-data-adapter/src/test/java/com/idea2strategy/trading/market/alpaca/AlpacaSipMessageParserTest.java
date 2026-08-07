@@ -1,133 +1,49 @@
 package com.idea2strategy.trading.market.alpaca;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import com.idea2strategy.trading.messaging.market.MarketEventType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AlpacaSipMessageParserTest {
     private static final Instant RECEIVED_AT = Instant.parse("2026-07-31T14:31:00.050Z");
-
     private final AlpacaSipMessageParser parser = new AlpacaSipMessageParser();
 
     @Test
-    void configuredIexFeedIsPreservedInTheProviderNeutralEvent() {
-        AlpacaSipMessageParser iexParser = new AlpacaSipMessageParser(AlpacaDataFeed.IEX);
-
-        AlpacaSipInboundMessage.MinuteBar bar = (AlpacaSipInboundMessage.MinuteBar) iexParser.parse(
-                "[{\"T\":\"b\",\"S\":\"AAPL\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,\"v\":1,"
-                        + "\"t\":\"2026-07-31T14:30:00Z\"}]",
-                RECEIVED_AT).get(0);
-
-        assertEquals("IEX", bar.input().feed());
-    }
-
-    @Test
-    void parsesTheOfficialControlFrameSequence() {
-        assertEquals(
-                List.of(new AlpacaSipInboundMessage.Connected()),
+    void parsesTheOfficialControlFrameSequenceForTradeSubscriptions() {
+        assertEquals(List.of(new AlpacaSipInboundMessage.Connected()),
                 parser.parse("[{\"T\":\"success\",\"msg\":\"connected\"}]", RECEIVED_AT));
-        assertEquals(
-                List.of(new AlpacaSipInboundMessage.Authenticated()),
+        assertEquals(List.of(new AlpacaSipInboundMessage.Authenticated()),
                 parser.parse("[{\"T\":\"success\",\"msg\":\"authenticated\"}]", RECEIVED_AT));
         assertEquals(
                 List.of(new AlpacaSipInboundMessage.SubscriptionConfirmed(List.of("AAPL", "MSFT"))),
-                parser.parse(
-                        "[{\"T\":\"subscription\",\"trades\":[\"AAPL\",\"MSFT\"],"
-                                + "\"quotes\":[\"AAPL\",\"MSFT\"],\"bars\":[\"AAPL\",\"MSFT\"]}]",
-                        RECEIVED_AT));
-        assertEquals(
-                List.of(new AlpacaSipInboundMessage.ProviderError(406, "connection limit exceeded")),
-                parser.parse("[{\"T\":\"error\",\"code\":406,\"msg\":\"connection limit exceeded\"}]", RECEIVED_AT));
+                parser.parse("[{\"T\":\"subscription\",\"trades\":[\"AAPL\",\"MSFT\"],"
+                        + "\"quotes\":[],\"bars\":[]}]", RECEIVED_AT));
     }
 
     @Test
-    void parsesMinuteBarIntoTheProviderNeutralContractShape() {
+    void parsesTradeTicksWithoutTurningThemIntoStrategyEvents() {
         List<AlpacaSipInboundMessage> messages = parser.parse(
-                "[{\"T\":\"b\",\"S\":\"AAPL\",\"o\":210.10,\"h\":210.25,\"l\":210.05,"
-                        + "\"c\":210.20,\"v\":2500,\"t\":\"2026-07-31T14:30:00Z\",\"n\":181,\"vw\":210.17}]",
+                "[{\"T\":\"t\",\"S\":\"AAPL\",\"i\":529835250,\"x\":\"V\","
+                        + "\"p\":210.125,\"s\":20,\"c\":[\"@\"],"
+                        + "\"t\":\"2026-07-31T14:30:00.123456Z\",\"z\":\"C\"}]",
                 RECEIVED_AT);
 
-        Instant barStart = Instant.parse("2026-07-31T14:30:00Z");
-        AlpacaMarketInput expected = new AlpacaMarketInput(
-                MarketEventType.BAR_1M,
-                "bar-20260731T143000Z",
-                "AAPL",
-                "SIP",
-                barStart,
-                RECEIVED_AT,
-                barStart.getEpochSecond() / 60,
-                0,
-                Map.of(
-                        "open", new BigDecimal("210.10"),
-                        "high", new BigDecimal("210.25"),
-                        "low", new BigDecimal("210.05"),
-                        "close", new BigDecimal("210.20"),
-                        "volume", new BigDecimal("2500")));
-        assertEquals(List.of(new AlpacaSipInboundMessage.MinuteBar(expected)), messages);
+        assertEquals(List.of(new AlpacaSipInboundMessage.TradeTick(
+                "AAPL", 529835250L, "V", new BigDecimal("210.125"), new BigDecimal("20"),
+                Instant.parse("2026-07-31T14:30:00.123456Z"), RECEIVED_AT, List.of("@"), "C")), messages);
     }
 
     @Test
-    void barSequenceIsTheEpochMinuteSoRedeliveryAndRestartsAgree() {
-        String frame = "[{\"T\":\"b\",\"S\":\"AAPL\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,\"v\":1,"
-                + "\"t\":\"2026-07-31T14:30:00Z\"}]";
-
-        AlpacaSipInboundMessage.MinuteBar first = (AlpacaSipInboundMessage.MinuteBar)
-                parser.parse(frame, RECEIVED_AT).get(0);
-        AlpacaSipInboundMessage.MinuteBar redelivered = (AlpacaSipInboundMessage.MinuteBar)
-                parser.parse(frame, RECEIVED_AT.plusSeconds(90)).get(0);
-
-        assertEquals(first.input().sequence(), redelivered.input().sequence());
-        assertEquals(first.input().providerEventId(), redelivered.input().providerEventId());
+    void oneMinuteBarsAreExplicitlyIgnoredAndMalformedTradesFailClosed() {
         assertEquals(
-                first.input().sequence() + 1,
-                ((AlpacaSipInboundMessage.MinuteBar) parser.parse(
-                        frame.replace("14:30:00Z", "14:31:00Z"), RECEIVED_AT.plusSeconds(60)).get(0))
-                        .input().sequence());
-    }
-
-    @Test
-    void quoteTradeAndUpdatedBarFramesAreReportedNotSilentlyDropped() {
-        List<AlpacaSipInboundMessage> messages = parser.parse(
-                "[{\"T\":\"q\",\"S\":\"AAPL\"},{\"T\":\"t\",\"S\":\"AAPL\"},{\"T\":\"u\",\"S\":\"AAPL\"}]",
-                RECEIVED_AT);
-
-        assertEquals(
-                List.of(
-                        new AlpacaSipInboundMessage.UnsupportedFrame("q"),
-                        new AlpacaSipInboundMessage.UnsupportedFrame("t"),
-                        new AlpacaSipInboundMessage.UnsupportedFrame("u")),
-                messages);
-    }
-
-    @Test
-    void rejectsMalformedFramesInsteadOfGuessing() {
-        assertThrows(IllegalArgumentException.class, () -> parser.parse("not json", RECEIVED_AT));
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> parser.parse("{\"T\":\"success\",\"msg\":\"connected\"}", RECEIVED_AT));
-        IllegalArgumentException missingField = assertThrows(
-                IllegalArgumentException.class,
-                () -> parser.parse(
-                        "[{\"T\":\"b\",\"S\":\"AAPL\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,"
-                                + "\"t\":\"2026-07-31T14:30:00Z\"}]",
-                        RECEIVED_AT));
-        assertInstanceOf(IllegalArgumentException.class, missingField);
-        assertEquals("SIP bar field v must be a number", missingField.getMessage());
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> parser.parse(
-                        "[{\"T\":\"b\",\"S\":\"AAPL\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,\"v\":1,"
-                                + "\"t\":\"yesterday\"}]",
-                        RECEIVED_AT));
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> parser.parse("[{\"T\":\"subscription\",\"trades\":[\"AAPL\"]}]", RECEIVED_AT));
+                List.of(new AlpacaSipInboundMessage.UnsupportedFrame("b")),
+                parser.parse("[{\"T\":\"b\",\"S\":\"AAPL\"}]", RECEIVED_AT));
+        assertThrows(IllegalArgumentException.class, () -> parser.parse(
+                "[{\"T\":\"t\",\"S\":\"AAPL\",\"i\":1,\"x\":\"V\",\"p\":1,"
+                        + "\"s\":1,\"c\":[],\"t\":\"bad\",\"z\":\"C\"}]", RECEIVED_AT));
     }
 }

@@ -276,7 +276,7 @@ class MarketEventStreamE2ETest {
     /** Publishes through the gateway's own publisher, so the layout under test is the real one. */
     private void publish(long sequence, String close) {
         var envelope = new MarketEventEnvelope(
-                "evt_rt3_" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.BAR_1M,
+                "evt_rt3_" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY,
                 "provider-" + sequence, EVENT_AT, EVENT_AT, sequence, 0, null,
                 Map.of("close", new BigDecimal(close)));
         publisher.publish(new com.idea2strategy.trading.market.alpaca.MarketEventHandlingResult(

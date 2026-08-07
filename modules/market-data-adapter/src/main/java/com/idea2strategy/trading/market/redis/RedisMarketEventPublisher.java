@@ -45,7 +45,7 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
             if type_error ~= nil then
               return type_error
             end
-            if ARGV[6] == 'BAR_1M' then
+            if string.sub(ARGV[6], 1, 4) == 'BAR_' then
               type_error = assert_type(KEYS[4], 'zset')
               if type_error ~= nil then
                 return type_error
@@ -100,7 +100,7 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
               end
             end
 
-            if ARGV[6] == 'BAR_1M' then
+            if string.sub(ARGV[6], 1, 4) == 'BAR_' then
               redis.call('ZREMRANGEBYSCORE', KEYS[4], ARGV[10], ARGV[10])
               redis.call('ZADD', KEYS[4], ARGV[10], ARGV[16])
               local bar_count = redis.call('ZCARD', KEYS[4])
@@ -108,7 +108,6 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
               if bar_count > capacity then
                 redis.call('ZREMRANGEBYRANK', KEYS[4], 0, bar_count - capacity - 1)
               end
-              redis.call('PUBLISH', KEYS[5], ARGV[16])
             end
 
             return {1, stream_id, latest_updated}
@@ -250,11 +249,10 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         List<Object> result = evalList(
                 PUBLISH_SCRIPT,
                 new String[] {
-                    streamKey(),
+                    streamKey(event.eventType()),
                     latestKey(event.instrumentId(), event.eventType()),
                     deduplicationKey(),
-                    recentBarsKey(event.instrumentId()),
-                    barUpdatesChannel()
+                    recentBarsKey(event.instrumentId(), event.eventType())
                 },
                 event.eventId(),
                 Integer.toString(event.schemaVersion()),
@@ -292,7 +290,7 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
     }
 
     public long streamLength() {
-        return commands.xlen(streamKey());
+        return commands.xlen(evaluationStreamKey());
     }
 
     /** Publishes the gateway's C09 result; older or duplicate observations cannot overwrite it. */
@@ -329,7 +327,7 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         if (consumerGroup == null || consumerGroup.isBlank()) {
             throw new IllegalArgumentException("consumerGroup must not be blank");
         }
-        List<Object> result = evalList(LAG_SCRIPT, new String[] {streamKey()}, consumerGroup);
+        List<Object> result = evalList(LAG_SCRIPT, new String[] {evaluationStreamKey()}, consumerGroup);
         long entryLag = number(result.get(0));
         String lastDeliveredId = result.get(1).toString();
         String deliveredOccurredAt = result.get(2).toString();
@@ -346,8 +344,25 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         return new ConsumerLagMeasurement(entryLag, observationLag, lastDeliveredId);
     }
 
+    public String evaluationStreamKey() {
+        return keyBase + ":strategy:evaluation-ready:v1";
+    }
+
+    /** The worker-facing stream is now evaluation-only. */
     public String streamKey() {
-        return keyBase + ":events";
+        return evaluationStreamKey();
+    }
+
+    public String candleStreamKey() {
+        return keyBase + ":strategy:candles:v1";
+    }
+
+    private String streamKey(MarketEventType eventType) {
+        return switch (eventType) {
+            case MARKET_EVALUATION_READY -> evaluationStreamKey();
+            case BAR_30M, BAR_1H, BAR_4H, BAR_1D -> candleStreamKey();
+            default -> keyBase + ":events";
+        };
     }
 
     String deduplicationKey() {
@@ -360,13 +375,17 @@ public final class RedisMarketEventPublisher implements AutoCloseable {
         return keyBase + ":latest:" + instrumentId + ":" + eventType.name();
     }
 
-    public String recentBarsKey(UUID instrumentId) {
+    public String recentBarsKey(UUID instrumentId, MarketEventType eventType) {
         Objects.requireNonNull(instrumentId, "instrumentId");
-        return keyBase + ":bars:" + instrumentId + ":1m";
-    }
-
-    public String barUpdatesChannel() {
-        return keyBase + ":bar-updates";
+        Objects.requireNonNull(eventType, "eventType");
+        String timeframe = switch (eventType) {
+            case BAR_30M -> "30m";
+            case BAR_1H -> "1h";
+            case BAR_4H -> "4h";
+            case BAR_1D -> "1d";
+            default -> "none";
+        };
+        return keyBase + ":bars:" + instrumentId + ":" + timeframe;
     }
 
     public String availabilityKey(UUID instrumentId) {

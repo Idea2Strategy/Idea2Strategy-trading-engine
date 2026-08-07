@@ -60,7 +60,7 @@ public class MarketEventTransportConfiguration {
         return new RedisMarketEventStreamConsumer(
                 connection.sync(),
                 runtime,
-                "{" + prefix + ":market}:events",
+                "{" + prefix + ":market}:strategy:evaluation-ready:v1",
                 environment.getProperty(
                         "trading.market-events.consumer-name",
                         "worker-" + java.util.UUID.randomUUID()),

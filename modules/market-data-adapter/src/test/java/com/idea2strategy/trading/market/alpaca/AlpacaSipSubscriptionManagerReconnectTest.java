@@ -31,6 +31,7 @@ class AlpacaSipSubscriptionManagerReconnectTest {
                 rightsGate,
                 () -> new AlpacaCredentials("environment-key", "environment-secret"),
                 transport);
+        manager.replaceTradeSubscriptions(approvedSymbols);
 
         manager.onConnected();
         manager.onAuthenticationApproved();
@@ -58,8 +59,11 @@ class AlpacaSipSubscriptionManagerReconnectTest {
         }
 
         @Override
-        public void subscribe(List<String> symbols) {
+        public void subscribeTrades(List<String> symbols) {
             subscriptionBatches.add(List.copyOf(symbols));
         }
+
+        @Override
+        public void unsubscribeTrades(List<String> symbols) {}
     }
 }

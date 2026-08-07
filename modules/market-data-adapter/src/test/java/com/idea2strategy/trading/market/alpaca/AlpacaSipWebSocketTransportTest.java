@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 
 class AlpacaSipWebSocketTransportTest {
     @Test
-    void emitsOfficialAlpacaAuthenticationAndStockSubscriptionFrames() {
+    void emitsOfficialAlpacaAuthenticationAndDynamicTradeFrames() {
         List<String> frames = new ArrayList<>();
         AlpacaSipWebSocketTransport transport = new AlpacaSipWebSocketTransport(text -> {
             frames.add(text);
@@ -17,12 +17,14 @@ class AlpacaSipWebSocketTransportTest {
         });
 
         transport.authenticate(new AlpacaCredentials("api-key", "api-secret"));
-        transport.subscribe(List.of("msft", "AAPL", "AAPL"));
+        transport.subscribeTrades(List.of("msft", "AAPL", "AAPL"));
+        transport.unsubscribeTrades(List.of("MSFT"));
 
         assertEquals(
                 List.of(
                         "{\"action\":\"auth\",\"key\":\"api-key\",\"secret\":\"api-secret\"}",
-                        "{\"action\":\"subscribe\",\"bars\":[\"AAPL\",\"MSFT\"]}"),
+                        "{\"action\":\"subscribe\",\"trades\":[\"AAPL\",\"MSFT\"]}",
+                        "{\"action\":\"unsubscribe\",\"trades\":[\"MSFT\"]}"),
                 frames);
     }
 }

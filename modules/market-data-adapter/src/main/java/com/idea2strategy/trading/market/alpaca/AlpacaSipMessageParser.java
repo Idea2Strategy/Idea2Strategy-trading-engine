@@ -5,21 +5,14 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.cfg.JsonNodeFeature;
-import com.idea2strategy.trading.messaging.market.MarketEventType;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 public final class AlpacaSipMessageParser {
-    private static final DateTimeFormatter BAR_EVENT_ID_FORMAT =
-            DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
-
     private final ObjectMapper mapper = new ObjectMapper()
             .configure(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS, true)
             .configure(JsonNodeFeature.STRIP_TRAILING_BIGDECIMAL_ZEROES, false);
@@ -61,43 +54,72 @@ public final class AlpacaSipMessageParser {
                 case "authenticated" -> new AlpacaSipInboundMessage.Authenticated();
                 default -> new AlpacaSipInboundMessage.UnsupportedFrame("success:" + text(node, "msg"));
             };
-            case "subscription" -> new AlpacaSipInboundMessage.SubscriptionConfirmed(symbols(node));
+            case "subscription" -> new AlpacaSipInboundMessage.SubscriptionConfirmed(symbols(node, "trades"));
             case "error" -> new AlpacaSipInboundMessage.ProviderError(
                     node.path("code").asInt(), node.path("msg").asText(""));
-            case "b" -> new AlpacaSipInboundMessage.MinuteBar(bar(node, receivedAt, feed));
+            case "b" -> new AlpacaSipInboundMessage.UnsupportedFrame("b");
+            case "t" -> trade(node, receivedAt);
             default -> new AlpacaSipInboundMessage.UnsupportedFrame(type);
         };
     }
 
-    private static AlpacaMarketInput bar(JsonNode node, Instant receivedAt, AlpacaDataFeed feed) {
-        Instant occurredAt = instant(node);
-        return new AlpacaMarketInput(
-                MarketEventType.BAR_1M,
-                "bar-" + BAR_EVENT_ID_FORMAT.format(occurredAt),
+    private static AlpacaSipInboundMessage.TradeTick trade(JsonNode node, Instant receivedAt) {
+        return new AlpacaSipInboundMessage.TradeTick(
                 text(node, "S"),
-                feed.eventValue(),
-                occurredAt,
+                integer(node, "i"),
+                text(node, "x"),
+                decimal(node, "p"),
+                decimal(node, "s"),
+                instant(node, "t"),
                 receivedAt,
-                occurredAt.getEpochSecond() / 60,
-                0,
-                Map.of(
-                        "open", decimal(node, "o"),
-                        "high", decimal(node, "h"),
-                        "low", decimal(node, "l"),
-                        "close", decimal(node, "c"),
-                        "volume", decimal(node, "v")));
+                strings(node, "c"),
+                text(node, "z"));
     }
 
-    private static List<String> symbols(JsonNode node) {
-        JsonNode bars = node.path("bars");
-        if (!bars.isArray()) {
-            throw new IllegalArgumentException("subscription frame is missing the bars symbol list");
+    private static List<String> symbols(JsonNode node, String field) {
+        JsonNode values = node.path(field);
+        if (!values.isArray()) {
+            throw new IllegalArgumentException("subscription frame is missing the " + field + " symbol list");
         }
         List<String> symbols = new ArrayList<>();
-        for (JsonNode symbol : bars) {
+        for (JsonNode symbol : values) {
             symbols.add(symbol.asText());
         }
         return symbols;
+    }
+
+    private static List<String> strings(JsonNode node, String field) {
+        JsonNode values = node.path(field);
+        if (!values.isArray()) {
+            throw new IllegalArgumentException("SIP trade field " + field + " must be an array");
+        }
+        List<String> result = new ArrayList<>();
+        values.forEach(value -> result.add(value.asText()));
+        return result;
+    }
+
+    private static BigDecimal decimal(JsonNode node, String field) {
+        JsonNode value = node.path(field);
+        if (!value.isNumber()) {
+            throw new IllegalArgumentException("SIP trade field " + field + " must be a number");
+        }
+        return value.decimalValue();
+    }
+
+    private static long integer(JsonNode node, String field) {
+        JsonNode value = node.path(field);
+        if (!value.canConvertToLong()) {
+            throw new IllegalArgumentException("SIP trade field " + field + " must be an integer");
+        }
+        return value.longValue();
+    }
+
+    private static Instant instant(JsonNode node, String field) {
+        try {
+            return Instant.parse(text(node, field));
+        } catch (DateTimeParseException exception) {
+            throw new IllegalArgumentException("SIP trade field " + field + " must be an RFC-3339 instant", exception);
+        }
     }
 
     private static String text(JsonNode node, String field) {
@@ -108,19 +130,4 @@ public final class AlpacaSipMessageParser {
         return value.asText();
     }
 
-    private static BigDecimal decimal(JsonNode node, String field) {
-        JsonNode value = node.path(field);
-        if (!value.isNumber()) {
-            throw new IllegalArgumentException("SIP bar field " + field + " must be a number");
-        }
-        return value.decimalValue();
-    }
-
-    private static Instant instant(JsonNode node) {
-        try {
-            return Instant.parse(text(node, "t"));
-        } catch (DateTimeParseException exception) {
-            throw new IllegalArgumentException("SIP bar field t must be an RFC-3339 instant", exception);
-        }
-    }
 }
