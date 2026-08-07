@@ -59,7 +59,8 @@ class RedisMarketEventPublisherTest {
             assertTrue(first.latestUpdated());
             assertEquals(MarketEventPublishStatus.DUPLICATE, duplicateAfterRestart.status());
             assertEquals(1, publisher.streamLength());
-            assertEquals(event, publisher.findLatest(AAPL_ID, MarketEventType.QUOTE).orElseThrow());
+            assertEquals(event, publisher.findLatest(
+                    AAPL_ID, MarketEventType.MARKET_EVALUATION_READY).orElseThrow());
         }
     }
 
@@ -78,7 +79,8 @@ class RedisMarketEventPublisherTest {
             assertEquals(MarketEventPublishStatus.PUBLISHED, correction.status());
             assertFalse(correction.latestUpdated());
             assertEquals(3, publisher.streamLength());
-            assertEquals(latest, publisher.findLatest(AAPL_ID, MarketEventType.QUOTE).orElseThrow());
+            assertEquals(latest, publisher.findLatest(
+                    AAPL_ID, MarketEventType.MARKET_EVALUATION_READY).orElseThrow());
         }
     }
 
@@ -89,7 +91,9 @@ class RedisMarketEventPublisherTest {
         try (RedisClient client = RedisClient.create(redisUri());
                 var connection = client.connect();
                 RedisMarketEventPublisher publisher = RedisMarketEventPublisher.connect(redisUri(), prefix)) {
-            connection.sync().set(publisher.latestKey(AAPL_ID, MarketEventType.QUOTE), "wrong-type");
+            connection.sync().set(
+                    publisher.latestKey(AAPL_ID, MarketEventType.MARKET_EVALUATION_READY),
+                    "wrong-type");
 
             assertThrows(
                     RedisCommandExecutionException.class,
@@ -214,7 +218,7 @@ class RedisMarketEventPublisherTest {
             String price) {
         Instant occurredAt = Instant.parse("2026-08-01T14:30:00Z").plusSeconds(sequence);
         return NORMALIZER.normalize(new AlpacaMarketInput(
-                MarketEventType.QUOTE,
+                MarketEventType.MARKET_EVALUATION_READY,
                 providerEventId,
                 "AAPL",
                 "sip",

@@ -276,15 +276,30 @@ class MarketEventStreamE2ETest {
     /** Publishes through the gateway's own publisher, so the layout under test is the real one. */
     private void publish(long sequence, String close) {
         var envelope = new MarketEventEnvelope(
-                "evt_rt3_" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY,
+                "evt_rt3_" + sequence, 2, INSTRUMENT, "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY,
                 "provider-" + sequence, EVENT_AT, EVENT_AT, sequence, 0, null,
-                Map.of("close", new BigDecimal(close)));
+                evaluationValues(close));
         publisher.publish(new com.idea2strategy.trading.market.alpaca.MarketEventHandlingResult(
                 com.idea2strategy.trading.market.alpaca.MarketEventHandlingStatus.APPLIED,
                 envelope,
                 sequence,
                 true,
                 true));
+    }
+
+    private static Map<String, BigDecimal> evaluationValues(String close) {
+        BigDecimal price = new BigDecimal(close);
+        return Map.ofEntries(
+                Map.entry("close", price),
+                Map.entry("closed30m", BigDecimal.ONE),
+                Map.entry("closed1h", BigDecimal.ZERO),
+                Map.entry("closed4h", BigDecimal.ZERO),
+                Map.entry("closed1d", BigDecimal.ZERO),
+                Map.entry("open30m", price),
+                Map.entry("high30m", price),
+                Map.entry("low30m", price),
+                Map.entry("close30m", price),
+                Map.entry("volume30m", BigDecimal.ONE));
     }
 
     private LoadedExecutionPlan plan() {
