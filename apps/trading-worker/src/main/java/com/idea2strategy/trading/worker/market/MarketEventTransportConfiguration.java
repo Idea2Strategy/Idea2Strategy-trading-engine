@@ -13,6 +13,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
+import io.micrometer.core.instrument.FunctionCounter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * RT3: wires the gateway's market event stream into the evaluation loop.
@@ -47,7 +50,8 @@ public class MarketEventTransportConfiguration {
     RedisMarketEventStreamConsumer marketEventStreamConsumer(
             StatefulRedisConnection<String, String> connection,
             EvaluatingBotRuntime runtime,
-            Environment environment) {
+            Environment environment,
+            MeterRegistry meterRegistry) {
         String prefix = environment.getProperty("trading.market-events.redis-key-prefix", "i2s");
         var availabilityPolicy = new RedisProjectedMarketAvailabilityPolicy(
                 connection.sync(),
@@ -57,7 +61,7 @@ public class MarketEventTransportConfiguration {
                         "trading.market-events.maximum-availability-age",
                         Duration.class,
                         Duration.ofMinutes(2)));
-        return new RedisMarketEventStreamConsumer(
+        RedisMarketEventStreamConsumer consumer = new RedisMarketEventStreamConsumer(
                 connection.sync(),
                 runtime,
                 "{" + prefix + ":market}:strategy:evaluation-ready:v1",
@@ -68,7 +72,25 @@ public class MarketEventTransportConfiguration {
                 environment.getProperty(
                         "trading.market-events.reclaim-after", Duration.class, Duration.ofSeconds(60)),
                 environment.getProperty("trading.market-events.maximum-entry-lag", Long.class, 600L),
-                availabilityPolicy);
+                availabilityPolicy,
+                environment.getProperty("trading.market-events.maximum-delivery-attempts", Integer.class, 5),
+                environment.getProperty("trading.market-events.dead-letter-capacity", Integer.class, 10_000));
+        Gauge.builder("trading.market.events.consumer.lag", consumer,
+                        value -> value.lastObservedLag())
+                .register(meterRegistry);
+        FunctionCounter.builder("trading.market.events.processed", consumer,
+                        value -> value.processedEntries())
+                .register(meterRegistry);
+        FunctionCounter.builder("trading.market.events.catchup", consumer,
+                        value -> value.catchUpEntries())
+                .register(meterRegistry);
+        FunctionCounter.builder("trading.market.events.dead_lettered", consumer,
+                        value -> value.deadLetteredEntries())
+                .register(meterRegistry);
+        FunctionCounter.builder("trading.market.events.availability_skipped", consumer,
+                        value -> value.availabilitySkippedEntries())
+                .register(meterRegistry);
+        return consumer;
     }
 
     @Bean

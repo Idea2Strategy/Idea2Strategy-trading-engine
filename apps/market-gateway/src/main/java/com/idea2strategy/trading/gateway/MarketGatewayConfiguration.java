@@ -57,15 +57,19 @@ public class MarketGatewayConfiguration {
     RedisMarketEventPublisher marketEventPublisher(
             @Value("${market-gateway.redis-uri}") String redisUri,
             @Value("${market-gateway.redis-key-prefix}") String keyPrefix,
-            @Value("${market-gateway.recent-bar-capacity:390}") int recentBarCapacity) {
-        return RedisMarketEventPublisher.connect(redisUri, keyPrefix, recentBarCapacity);
+            @Value("${market-gateway.recent-bar-capacity:390}") int recentBarCapacity,
+            @Value("${market-gateway.event-stream-capacity:1000000}") int eventStreamCapacity,
+            @Value("${market-gateway.event-deduplication-retention:P30D}") Duration deduplicationRetention) {
+        return RedisMarketEventPublisher.connect(
+                redisUri, keyPrefix, recentBarCapacity, eventStreamCapacity, deduplicationRetention);
     }
 
     @Bean(destroyMethod = "close")
     RedisDisplayPricePublisher displayPricePublisher(
             @Value("${market-gateway.redis-uri}") String redisUri,
-            @Value("${market-gateway.redis-key-prefix}") String keyPrefix) {
-        return RedisDisplayPricePublisher.connect(redisUri, keyPrefix);
+            @Value("${market-gateway.redis-key-prefix}") String keyPrefix,
+            @Value("${market-gateway.display-minute-bar-capacity:10000}") int minuteBarCapacity) {
+        return RedisDisplayPricePublisher.connect(redisUri, keyPrefix, minuteBarCapacity);
     }
 
     @Bean(destroyMethod = "close")

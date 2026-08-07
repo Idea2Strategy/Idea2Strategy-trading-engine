@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
@@ -120,12 +121,16 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         var interpreted = interpreter.interpret(plan.planPayload());
         var evaluationTimeframe = StrategyEvaluationTimeframe.fromPlan(plan.planPayload());
         var calculator = new BoundedWindowFeatureCalculator(OfficialFeatureCatalog.RSI_14);
-        var features = new OrderedIncrementalFeatureRuntime(
-                plan.botId(), -1, List.of(calculator),
-                Map.of(calculator.key(), seedFrom(warmup, calculator)));
+        Map<UUID, InstrumentRuntimeState> instrumentStates = new LinkedHashMap<>();
+        for (UUID instrumentId : interpreted.subscribedInstruments()) {
+            instrumentStates.put(instrumentId, new InstrumentRuntimeState(
+                    new OrderedIncrementalFeatureRuntime(
+                            plan.botId(), -1, List.of(calculator),
+                            Map.of(calculator.key(), seedFrom(warmup, calculator, instrumentId)))));
+        }
 
         bots.put(plan.botId(), new RegisteredBot(
-                plan.botId(), interpreted, features, calculator, evaluationTimeframe, window));
+                plan.botId(), interpreted, instrumentStates, calculator, evaluationTimeframe, window));
         log.info("bot {} registered for evaluation over {} instruments within {}",
                 plan.botId(), interpreted.subscribedInstruments().size(), window);
     }
@@ -161,7 +166,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             if (!bot.plan().subscribedInstruments().contains(event.instrumentId())) {
                 continue;
             }
-            if (!closesRequiredTimeframe(event, bot.evaluationTimeframe())) {
+            if (!closesAnyRequiredTimeframe(event, bot.evaluationTimeframes())) {
                 continue;
             }
             if (!bot.window().admits(event.occurredAt())) {
@@ -176,29 +181,48 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         return List.copyOf(results);
     }
 
+    /**
+     * Advances subscribed bots over an old stream entry without producing an order.
+     *
+     * <p>This is the recovery path for a consumer group that is beyond its safe decision lag. The
+     * worker must drain that backlog or it can never become current, but deciding on every stale bar
+     * would turn recovery into a burst of obsolete orders. Catch-up therefore keeps indicators,
+     * rolling bars and position-age metrics current, then normal {@link #feed(MarketEventEnvelope)}
+     * resumes once the stream is inside the configured lag window.
+     */
+    public void catchUp(MarketEventEnvelope event) {
+        Objects.requireNonNull(event, "event");
+        if (event.eventType() != MarketEventType.MARKET_EVALUATION_READY) {
+            return;
+        }
+        for (RegisteredBot bot : bots.values()) {
+            if (!bot.plan().subscribedInstruments().contains(event.instrumentId())
+                    || !closesAnyRequiredTimeframe(event, bot.evaluationTimeframes())
+                    || !bot.window().admits(event.occurredAt())) {
+                continue;
+            }
+            synchronized (bot) {
+                advance(bot, event).ifPresent(advanced ->
+                        inputsFor(bot, event, advanced.snapshot(), advanced.price(), advanced.marketValues()));
+            }
+        }
+    }
+
     /** One bot's evaluation of one event, serialised on the bot as C13 requires. */
     private Optional<CandidateBatchProcessingResult> evaluate(
             RegisteredBot bot, MarketEventEnvelope event) {
         synchronized (bot) {
-            BigDecimal price = priceOf(event);
-            if (price == null) {
+            Optional<AdvancedMarketState> advancedState = advance(bot, event);
+            if (advancedState.isEmpty()) {
                 return Optional.empty();
             }
-            if (!bot.marketSequenceAdvances(event.sequence())) {
-                // A repeat or a late arrival. Evaluating it would decide from data the bot has already
-                // moved past, and the decision would look current. The processor's claim ledger is
-                // still the durable guarantee; this only avoids doing the work twice.
-                log.debug("bot {} ignoring market event {} at sequence {}, already past {}",
-                        bot.botId(), event.eventId(), event.sequence(), bot.lastMarketSequence());
+            AdvancedMarketState advanced = advancedState.orElseThrow();
+            if (!closesAllRequiredTimeframes(event, bot.evaluationTimeframes())) {
                 return Optional.empty();
             }
-            // The feature runtime's sequence is its own dense ordering, not the market's: a bot that
-            // starts mid-stream sees whatever sequence the gateway is on, and the runtime rejects a
-            // gap. The market's own ordering is checked above, where it means something.
-            IncrementalFeatureSnapshot snapshot = bot.features().process(new RuntimeTrigger(
-                    bot.botId(), bot.nextLocalSequence(), event.eventId(), RuntimeTriggerType.MARKET,
-                    event.occurredAt(), Map.of(CLOSE, price)));
-            Map<String, String> marketValues = bot.signalState(event.instrumentId()).accept(event);
+            BigDecimal price = advanced.price();
+            IncrementalFeatureSnapshot snapshot = advanced.snapshot();
+            Map<String, String> marketValues = advanced.marketValues();
 
             UUID evaluationId = derived("evaluation", bot.botId() + ":" + event.eventId());
             BasicExecutionResult execution = executor.execute(new BasicExecutionRequest(
@@ -228,6 +252,26 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             return Optional.of(processor.process(adapter.toDomain(
                     batchOf(bot, scope.get(), converged, event, evaluationId, sourceEventId, price))));
         }
+    }
+
+    /** Advances only the state belonging to this event's instrument. Caller holds the bot monitor. */
+    private Optional<AdvancedMarketState> advance(RegisteredBot bot, MarketEventEnvelope event) {
+        BigDecimal price = priceOf(event);
+        if (price == null) {
+            return Optional.empty();
+        }
+        InstrumentRuntimeState state = bot.instrumentState(event.instrumentId());
+        if (!state.marketSequenceAdvances(event.sequence())) {
+            log.debug("bot {} ignoring market event {} for instrument {} at sequence {}, already past {}",
+                    bot.botId(), event.eventId(), event.instrumentId(), event.sequence(),
+                    state.lastMarketSequence());
+            return Optional.empty();
+        }
+        IncrementalFeatureSnapshot snapshot = state.features().process(new RuntimeTrigger(
+                bot.botId(), state.nextLocalSequence(), event.eventId(), RuntimeTriggerType.MARKET,
+                event.occurredAt(), Map.of(CLOSE, price)));
+        Map<String, String> marketValues = bot.signalState(event.instrumentId()).accept(event);
+        return Optional.of(new AdvancedMarketState(snapshot, price, marketValues));
     }
 
     /**
@@ -327,7 +371,9 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
      * definition's data and would corrupt the window.
      */
     private static IncrementalFeatureState seedFrom(
-            PreparedWarmup warmup, BoundedWindowFeatureCalculator calculator) {
+            PreparedWarmup warmup,
+            BoundedWindowFeatureCalculator calculator,
+            UUID instrumentId) {
         IncrementalFeatureState seeded = new IncrementalFeatureState(0, Map.of());
         if (warmup == null) {
             return seeded;
@@ -338,6 +384,9 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                 continue;
             }
             for (FeatureObservation observation : series.observations()) {
+                if (!instrumentId.toString().equals(observation.instrument())) {
+                    continue;
+                }
                 seeded = calculator.calculate(seeded, new RuntimeTrigger(
                         derived("warmup", series.requirementId()),
                         0,
@@ -356,20 +405,33 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         return close != null ? close : event.values().get("price");
     }
 
-    private static boolean closesRequiredTimeframe(
+    private static boolean closesAnyRequiredTimeframe(
+            MarketEventEnvelope event, Set<StrategyEvaluationTimeframe> timeframes) {
+        return timeframes.stream().anyMatch(timeframe -> closesTimeframe(event, timeframe));
+    }
+
+    private static boolean closesAllRequiredTimeframes(
+            MarketEventEnvelope event, Set<StrategyEvaluationTimeframe> timeframes) {
+        return timeframes.stream().allMatch(timeframe -> closesTimeframe(event, timeframe));
+    }
+
+    private static boolean closesTimeframe(
             MarketEventEnvelope event, StrategyEvaluationTimeframe timeframe) {
         BigDecimal flag = event.values().get(timeframe.closedFlag());
         if (flag != null) {
             return flag.signum() > 0;
         }
-        // Schema v1 evaluation events predate explicit timeframe flags and represent the minimum
-        // live cadence. Schema v2+ must always state which strategy candles closed.
         return event.schemaVersion() == 1 && timeframe == StrategyEvaluationTimeframe.THIRTY_MINUTES;
     }
 
     private static UUID derived(String kind, String material) {
         return UUID.nameUUIDFromBytes((kind + ":" + material).getBytes(StandardCharsets.UTF_8));
     }
+
+    private record AdvancedMarketState(
+            IncrementalFeatureSnapshot snapshot,
+            BigDecimal price,
+            Map<String, String> marketValues) {}
 
     /**
      * One registered bot and the two orderings it tracks.
@@ -381,49 +443,26 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
     private static final class RegisteredBot {
         private final UUID botId;
         private final BasicPlanInterpreter.InterpretedPlan plan;
-        private final OrderedIncrementalFeatureRuntime features;
+        private final Map<UUID, InstrumentRuntimeState> instrumentStates;
         private final BoundedWindowFeatureCalculator calculator;
-        private final StrategyEvaluationTimeframe evaluationTimeframe;
+        private final Set<StrategyEvaluationTimeframe> evaluationTimeframes;
         private final EvaluationWindow window;
         private final Map<UUID, BasicMarketSignalState> signalStates = new LinkedHashMap<>();
         private final Map<UUID, PositionTracker> positionTrackers = new LinkedHashMap<>();
 
-        /** The gateway's stream position, which starts wherever the bot joined. */
-        private long lastMarketSequence = Long.MIN_VALUE;
-
-        /** The feature runtime's own dense ordering, which must start at zero and never gap. */
-        private long localSequence = -1;
-
         private RegisteredBot(
                 UUID botId,
                 BasicPlanInterpreter.InterpretedPlan plan,
-                OrderedIncrementalFeatureRuntime features,
+                Map<UUID, InstrumentRuntimeState> instrumentStates,
                 BoundedWindowFeatureCalculator calculator,
-                StrategyEvaluationTimeframe evaluationTimeframe,
+                Set<StrategyEvaluationTimeframe> evaluationTimeframes,
                 EvaluationWindow window) {
             this.botId = botId;
             this.plan = plan;
-            this.features = features;
+            this.instrumentStates = new LinkedHashMap<>(instrumentStates);
             this.calculator = calculator;
-            this.evaluationTimeframe = evaluationTimeframe;
+            this.evaluationTimeframes = Set.copyOf(evaluationTimeframes);
             this.window = window;
-        }
-
-        /** True when this event moves the bot forward, and records it when it does. */
-        private boolean marketSequenceAdvances(long sequence) {
-            if (sequence <= lastMarketSequence) {
-                return false;
-            }
-            lastMarketSequence = sequence;
-            return true;
-        }
-
-        private long nextLocalSequence() {
-            return ++localSequence;
-        }
-
-        private long lastMarketSequence() {
-            return lastMarketSequence;
         }
 
         private UUID botId() {
@@ -434,16 +473,20 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             return plan;
         }
 
-        private OrderedIncrementalFeatureRuntime features() {
-            return features;
+        private InstrumentRuntimeState instrumentState(UUID instrumentId) {
+            InstrumentRuntimeState state = instrumentStates.get(instrumentId);
+            if (state == null) {
+                throw new IllegalArgumentException("instrument is not subscribed by bot: " + instrumentId);
+            }
+            return state;
         }
 
         private BoundedWindowFeatureCalculator calculator() {
             return calculator;
         }
 
-        private StrategyEvaluationTimeframe evaluationTimeframe() {
-            return evaluationTimeframe;
+        private Set<StrategyEvaluationTimeframe> evaluationTimeframes() {
+            return evaluationTimeframes;
         }
 
         private EvaluationWindow window() {
@@ -461,6 +504,37 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
 
         private void clearPositionTracker(UUID instrumentId) {
             positionTrackers.remove(instrumentId);
+        }
+    }
+
+    /** Mutable market and feature ordering for exactly one bot/instrument pair. */
+    private static final class InstrumentRuntimeState {
+        private final OrderedIncrementalFeatureRuntime features;
+        private long lastMarketSequence = Long.MIN_VALUE;
+        private long localSequence = -1;
+
+        private InstrumentRuntimeState(OrderedIncrementalFeatureRuntime features) {
+            this.features = Objects.requireNonNull(features, "features");
+        }
+
+        private boolean marketSequenceAdvances(long sequence) {
+            if (sequence <= lastMarketSequence) {
+                return false;
+            }
+            lastMarketSequence = sequence;
+            return true;
+        }
+
+        private long nextLocalSequence() {
+            return ++localSequence;
+        }
+
+        private long lastMarketSequence() {
+            return lastMarketSequence;
+        }
+
+        private OrderedIncrementalFeatureRuntime features() {
+            return features;
         }
     }
 
@@ -496,7 +570,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             values.put("position.returnPercent", currentReturn.toPlainString());
             values.put("position.peakReturnPercent", peakReturn.toPlainString());
             values.put("position.drawdownPercent", drawdown.toPlainString());
-            for (String resolution : List.of("1m", "30m", "1h", "4h", "1d")) {
+            for (String resolution : List.of("30m", "1h", "4h", "1d")) {
                 if (Boolean.parseBoolean(marketValues.getOrDefault("bar.closed." + resolution, "false"))) {
                     closedBars.merge(resolution, 1L, Long::sum);
                 }

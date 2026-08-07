@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-/** Resolves the one live candle cadence a Basic runtime can advance from a compiled plan. */
+/** Resolves the supported live candle cadences a Basic runtime needs from a compiled plan. */
 enum StrategyEvaluationTimeframe {
     THIRTY_MINUTES("closed30m"),
     ONE_HOUR("closed1h"),
@@ -23,18 +23,14 @@ enum StrategyEvaluationTimeframe {
         return closedFlag;
     }
 
-    static StrategyEvaluationTimeframe fromPlan(String planPayload) {
+    static Set<StrategyEvaluationTimeframe> fromPlan(String planPayload) {
         try {
             Set<StrategyEvaluationTimeframe> resolved = new LinkedHashSet<>();
             collect(MAPPER.readTree(planPayload), resolved);
             if (resolved.isEmpty()) {
                 throw new IllegalArgumentException("compiled plan declares no supported live resolution");
             }
-            if (resolved.size() != 1) {
-                throw new IllegalArgumentException(
-                        "one Basic bot cannot mix multiple live feature resolutions: " + resolved);
-            }
-            return resolved.iterator().next();
+            return Set.copyOf(resolved);
         } catch (com.fasterxml.jackson.core.JsonProcessingException failure) {
             throw new IllegalArgumentException("compiled plan is not valid JSON", failure);
         }
@@ -56,8 +52,7 @@ enum StrategyEvaluationTimeframe {
 
     private static StrategyEvaluationTimeframe parse(String value) {
         return switch (value.trim().toUpperCase(java.util.Locale.ROOT)) {
-            // Existing locked 1m plans are deliberately migrated to the new minimum live cadence.
-            case "1M", "PT1M", "30M", "PT30M" -> THIRTY_MINUTES;
+            case "30M", "PT30M" -> THIRTY_MINUTES;
             case "1H", "PT1H" -> ONE_HOUR;
             case "4H", "PT4H" -> FOUR_HOURS;
             case "1D", "P1D", "PT24H" -> ONE_DAY;

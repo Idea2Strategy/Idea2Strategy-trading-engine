@@ -17,6 +17,9 @@ spring:
 #   instrument-mapping-path: /etc/market-gateway/instruments.json
 #   minimum-instrument-count: 500
 #   recent-bar-capacity: 390
+#   event-stream-capacity: 1000000
+#   event-deduplication-retention: P30D
+#   display-minute-bar-capacity: 10000
 #   candle-fetch-batch-size: 200
 #   candle-finalization-grace: PT2S
 #   candle-poll-delay: PT5S

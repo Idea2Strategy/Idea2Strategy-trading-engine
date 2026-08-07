@@ -475,8 +475,8 @@ class BotControlIntegrationE2ETest {
         }
         return new PreparedWarmup(
                 "manifest-b91", "dataset-b91", 1, "a".repeat(64),
-                Map.of("rsi-14-pt1m", new WarmupFeatureSeries(
-                        "rsi-14-pt1m", "RSI_14", "1.0.0", "PT1M", "manifest-b91", "a".repeat(64),
+                Map.of("rsi-14-pt30m", new WarmupFeatureSeries(
+                        "rsi-14-pt30m", "RSI_14", "1.0.0", "PT30M", "manifest-b91", "a".repeat(64),
                         observations)));
     }
 
@@ -494,16 +494,16 @@ class BotControlIntegrationE2ETest {
                 "elementCatalogVersion":"basic-elements:2026-08-04",\
                 "instrumentCatalogVersion":"us-supported-universe:2026-08-04",\
                 "compilerVersion":"basic-compiler:1.0.0",\
-                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt1m",\
+                "requiredFeatureSetHash":"sha256:%s","requiredFeatures":[{"requirementId":"rsi-14-pt30m",\
                 "featureId":"b9100000-0000-4000-8000-000000000401","featureVersion":"1.0.0",\
-                "instruments":["%s"],"resolution":"PT1M","requiredObservations":14}],\
+                "instruments":["%s"],"resolution":"PT30M","requiredObservations":14}],\
                 "executionSnapshot":{"immutableStrategyVersion":{\
                 "snapshotSchemaVersion":"basic-launch-snapshot.v1","semanticHash":"sha256:%s",\
                 "snapshotHash":"sha256:%s"},"mode":"BASIC","initialCashAmount":"100000.00000000",\
                 "currency":"USD","partitions":[{"key":"partition-1","budgetCapBps":10000,\
                 "flows":[{"key":"%s","officialInstrumentIds":["%s"]}]}]},\
                 "steps":[{"sequence":1,"operation":"LOAD_FEATURE",\
-                "arguments":{"feature":"RSI_14","resolution":"1m"}},{"sequence":2,"operation":"COMPARE",\
+                "arguments":{"feature":"RSI_14","resolution":"30m"}},{"sequence":2,"operation":"COMPARE",\
                 "arguments":{"operator":"LT","threshold":"30"}},{"sequence":3,\
                 "operation":"EMIT_ORDER_CANDIDATE",\
                 "arguments":{"allocation":"EQUAL","orderType":"MARKET","side":"BUY"}}],\

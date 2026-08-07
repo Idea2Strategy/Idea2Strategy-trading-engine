@@ -81,13 +81,14 @@ class RedisMarketEventPublisherUnitTest {
         assertEquals(List.of(
                         "{unit-test:market}:events",
                         "{unit-test:market}:latest:" + AAPL_ID + ":QUOTE",
-                        "{unit-test:market}:seen",
+                        "{unit-test:market}:seen:v2",
                         "{unit-test:market}:bars:" + AAPL_ID + ":none"),
                 List.of(keys.getValue()));
         assertEquals(event.eventId(), arguments.getValue()[0]);
         assertEquals("42", arguments.getValue()[9]);
         assertEquals("0", arguments.getValue()[10]);
         assertEquals("1", arguments.getValue()[13]);
+        assertEquals("1000000", arguments.getValue()[18]);
     }
 
     @Test
