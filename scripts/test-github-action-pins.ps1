@@ -5,6 +5,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $expected = @{
     "actions/checkout"           = @{ Sha = "3d3c42e5aac5ba805825da76410c181273ba90b1"; Tag = "v7.0.1" }
     "actions/setup-java"         = @{ Sha = "b6effb05e454b25005698d916606bdc6ffcbf961"; Tag = "v5.7.0" }
+    "docker/setup-buildx-action" = @{ Sha = "bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"; Tag = "v4.2.0" }
     "gradle/actions/setup-gradle" = @{ Sha = "9c971963bec38e04b3d30dcc455b5382be2fdbfb"; Tag = "v6.3.0" }
 }
 $pattern = '^\s*(?:-\s+)?uses:\s+([^\s@]+)@([^\s#]+)(?:\s+#\s+(\S+))?\s*$'
