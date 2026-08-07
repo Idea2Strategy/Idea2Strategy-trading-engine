@@ -251,7 +251,7 @@ class MarketEventStreamE2ETest {
     }
 
     private static String streamKey() {
-        return "{" + keyPrefix + ":market}:events";
+        return publisher.evaluationStreamKey();
     }
 
     /** Takes the entry as another replica would and never acknowledges it. */
