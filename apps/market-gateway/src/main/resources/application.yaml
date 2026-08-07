@@ -17,6 +17,9 @@ spring:
 #   instrument-mapping-path: /etc/market-gateway/instruments.json
 #   minimum-instrument-count: 500
 #   recent-bar-capacity: 390
+#   candle-fetch-batch-size: 200
+#   candle-finalization-grace: PT2S
+#   candle-poll-delay: PT5S
 #   alpaca-feed: sip
 #   rights-evidence-path: /etc/market-gateway/alpaca-sip-rights.json
 #   materialization-receipt-path: /etc/market-gateway/materialization.properties

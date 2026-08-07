@@ -338,9 +338,9 @@ class EvaluationLoopE2ETest {
         runtime.start(plan(), warmup(), EvaluationWindow.openEndedFrom(ELIGIBLE_FROM));
 
         MarketEventEnvelope other = new MarketEventEnvelope(
-                "market-other", 1, UUID.fromString("c2000000-0000-4000-8000-0000000000ff"),
-                "ALPACA", "SIP", MarketEventType.BAR_1M, "p-other", EVENT_AT, EVENT_AT,
-                99, 0, null, Map.of("close", new BigDecimal("84")));
+                "market-other", 2, UUID.fromString("c2000000-0000-4000-8000-0000000000ff"),
+                "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY, "p-other", EVENT_AT, EVENT_AT,
+                99, 0, null, evaluationValues("84"));
 
         assertTrue(runtime.feed(other).isEmpty());
     }
@@ -388,9 +388,24 @@ class EvaluationLoopE2ETest {
 
     private MarketEventEnvelope eventAt(long sequence, String close, Instant observedAt) {
         return new MarketEventEnvelope(
-                "market-" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.BAR_1M,
+                "market-" + sequence, 2, INSTRUMENT, "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY,
                 "provider-" + sequence, observedAt, observedAt, sequence, 0, null,
-                Map.of("close", new BigDecimal(close)));
+                evaluationValues(close));
+    }
+
+    private static Map<String, BigDecimal> evaluationValues(String close) {
+        BigDecimal price = new BigDecimal(close);
+        return Map.ofEntries(
+                Map.entry("close", price),
+                Map.entry("closed30m", BigDecimal.ONE),
+                Map.entry("closed1h", BigDecimal.ZERO),
+                Map.entry("closed4h", BigDecimal.ZERO),
+                Map.entry("closed1d", BigDecimal.ZERO),
+                Map.entry("open30m", price),
+                Map.entry("high30m", price),
+                Map.entry("low30m", price),
+                Map.entry("close30m", price),
+                Map.entry("volume30m", BigDecimal.ONE));
     }
 
     /** The document B publishes, buying when RSI_14 falls below 30 with equal allocation. */

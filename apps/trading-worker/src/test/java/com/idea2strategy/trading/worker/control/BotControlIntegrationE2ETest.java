@@ -482,7 +482,7 @@ class BotControlIntegrationE2ETest {
 
     private MarketEventEnvelope event(long sequence, String close) {
         return new MarketEventEnvelope(
-                "market-" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.BAR_1M,
+                "market-" + sequence, 1, INSTRUMENT, "ALPACA", "SIP", MarketEventType.MARKET_EVALUATION_READY,
                 "provider-" + sequence, EVENT_AT, EVENT_AT, sequence, 0, null,
                 Map.of("close", new BigDecimal(close)));
     }

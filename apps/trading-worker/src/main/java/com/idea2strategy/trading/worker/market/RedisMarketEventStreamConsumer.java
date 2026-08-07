@@ -2,6 +2,7 @@ package com.idea2strategy.trading.worker.market;
 
 import com.idea2strategy.trading.market.redis.MarketEventStreamEntry;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
+import com.idea2strategy.trading.messaging.market.MarketEventType;
 import com.idea2strategy.trading.worker.runtime.EvaluatingBotRuntime;
 import io.lettuce.core.Consumer;
 import io.lettuce.core.RedisBusyException;
@@ -169,6 +170,12 @@ public final class RedisMarketEventStreamConsumer {
             }
             try {
                 MarketEventEnvelope event = MarketEventStreamEntry.decode(message.getBody());
+                if (event.eventType() != MarketEventType.MARKET_EVALUATION_READY) {
+                    commands.xack(streamKey, CONSUMER_GROUP, message.getId());
+                    log.warn("non-evaluation event {} appeared on the evaluation stream and was ignored",
+                            event.eventId());
+                    continue;
+                }
                 if (!availabilityPolicy.permits(event)) {
                     // The projection may be racing the event publication or may recover later. Leave
                     // the entry pending so reclaim retries it; acknowledging would permanently lose

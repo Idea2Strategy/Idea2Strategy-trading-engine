@@ -6,6 +6,7 @@ import com.idea2strategy.trading.messaging.evaluation.OrderCandidate;
 import com.idea2strategy.trading.messaging.evaluation.OrderCandidateBatch;
 import com.idea2strategy.trading.messaging.evaluation.OrderSide;
 import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
+import com.idea2strategy.trading.messaging.market.MarketEventType;
 import com.idea2strategy.trading.strategy.runtime.basic.BasicDecisionStatus;
 import com.idea2strategy.trading.strategy.runtime.basic.BasicExecutionRequest;
 import com.idea2strategy.trading.strategy.runtime.basic.BasicExecutionResult;
@@ -117,13 +118,14 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         Objects.requireNonNull(plan, "plan");
         Objects.requireNonNull(window, "window");
         var interpreted = interpreter.interpret(plan.planPayload());
+        var evaluationTimeframe = StrategyEvaluationTimeframe.fromPlan(plan.planPayload());
         var calculator = new BoundedWindowFeatureCalculator(OfficialFeatureCatalog.RSI_14);
         var features = new OrderedIncrementalFeatureRuntime(
                 plan.botId(), -1, List.of(calculator),
                 Map.of(calculator.key(), seedFrom(warmup, calculator)));
 
         bots.put(plan.botId(), new RegisteredBot(
-                plan.botId(), interpreted, features, calculator, window));
+                plan.botId(), interpreted, features, calculator, evaluationTimeframe, window));
         log.info("bot {} registered for evaluation over {} instruments within {}",
                 plan.botId(), interpreted.subscribedInstruments().size(), window);
     }
@@ -150,9 +152,16 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
      */
     public List<CandidateBatchProcessingResult> feed(MarketEventEnvelope event) {
         Objects.requireNonNull(event, "event");
+        if (event.eventType() != MarketEventType.MARKET_EVALUATION_READY) {
+            log.debug("ignoring non-evaluation market event {} ({})", event.eventId(), event.eventType());
+            return List.of();
+        }
         List<CandidateBatchProcessingResult> results = new ArrayList<>();
         for (RegisteredBot bot : bots.values()) {
             if (!bot.plan().subscribedInstruments().contains(event.instrumentId())) {
+                continue;
+            }
+            if (!closesRequiredTimeframe(event, bot.evaluationTimeframe())) {
                 continue;
             }
             if (!bot.window().admits(event.occurredAt())) {
@@ -347,6 +356,17 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         return close != null ? close : event.values().get("price");
     }
 
+    private static boolean closesRequiredTimeframe(
+            MarketEventEnvelope event, StrategyEvaluationTimeframe timeframe) {
+        BigDecimal flag = event.values().get(timeframe.closedFlag());
+        if (flag != null) {
+            return flag.signum() > 0;
+        }
+        // Schema v1 evaluation events predate explicit timeframe flags and represent the minimum
+        // live cadence. Schema v2+ must always state which strategy candles closed.
+        return event.schemaVersion() == 1 && timeframe == StrategyEvaluationTimeframe.THIRTY_MINUTES;
+    }
+
     private static UUID derived(String kind, String material) {
         return UUID.nameUUIDFromBytes((kind + ":" + material).getBytes(StandardCharsets.UTF_8));
     }
@@ -363,6 +383,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         private final BasicPlanInterpreter.InterpretedPlan plan;
         private final OrderedIncrementalFeatureRuntime features;
         private final BoundedWindowFeatureCalculator calculator;
+        private final StrategyEvaluationTimeframe evaluationTimeframe;
         private final EvaluationWindow window;
         private final Map<UUID, BasicMarketSignalState> signalStates = new LinkedHashMap<>();
         private final Map<UUID, PositionTracker> positionTrackers = new LinkedHashMap<>();
@@ -378,11 +399,13 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                 BasicPlanInterpreter.InterpretedPlan plan,
                 OrderedIncrementalFeatureRuntime features,
                 BoundedWindowFeatureCalculator calculator,
+                StrategyEvaluationTimeframe evaluationTimeframe,
                 EvaluationWindow window) {
             this.botId = botId;
             this.plan = plan;
             this.features = features;
             this.calculator = calculator;
+            this.evaluationTimeframe = evaluationTimeframe;
             this.window = window;
         }
 
@@ -417,6 +440,10 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
 
         private BoundedWindowFeatureCalculator calculator() {
             return calculator;
+        }
+
+        private StrategyEvaluationTimeframe evaluationTimeframe() {
+            return evaluationTimeframe;
         }
 
         private EvaluationWindow window() {
@@ -469,7 +496,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             values.put("position.returnPercent", currentReturn.toPlainString());
             values.put("position.peakReturnPercent", peakReturn.toPlainString());
             values.put("position.drawdownPercent", drawdown.toPlainString());
-            for (String resolution : List.of("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w")) {
+            for (String resolution : List.of("1m", "30m", "1h", "4h", "1d")) {
                 if (Boolean.parseBoolean(marketValues.getOrDefault("bar.closed." + resolution, "false"))) {
                     closedBars.merge(resolution, 1L, Long::sum);
                 }

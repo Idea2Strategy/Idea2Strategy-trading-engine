@@ -37,7 +37,7 @@
       "instrumentId": "8a35e6b5-cf84-4f63-920d-57c1f1b95df0",
       "provider": "ALPACA",
       "feed": "SIP",
-      "eventType": "BAR_1M",
+      "eventType": "BAR_30M",
       "providerEventId": "bar-20260731T143000Z",
       "occurredAt": "2026-07-31T14:30:00Z",
       "receivedAt": "2026-07-31T14:31:00.050Z",
