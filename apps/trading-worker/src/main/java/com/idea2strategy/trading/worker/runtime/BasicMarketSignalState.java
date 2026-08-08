@@ -4,6 +4,7 @@ import com.idea2strategy.trading.messaging.market.MarketEventEnvelope;
 import com.idea2strategy.trading.messaging.market.MarketEventType;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
@@ -34,11 +35,13 @@ final class BasicMarketSignalState {
             new Resolution("1d", "closed1d"));
 
     private final Map<String, Series> series = new LinkedHashMap<>();
+    private final LocalDate executionEligibleDate;
     private LocalDate tradingDay;
     private long tradingDayIndex;
     private BigDecimal sessionOpen;
 
-    BasicMarketSignalState() {
+    BasicMarketSignalState(Instant executionEligibleFrom) {
+        this.executionEligibleDate = executionEligibleFrom.atZone(MARKET_ZONE).toLocalDate();
         RESOLUTIONS.forEach(resolution -> series.put(resolution.code(), new Series(resolution)));
     }
 
@@ -52,8 +55,8 @@ final class BasicMarketSignalState {
         LocalDate previousTradingDay = tradingDay;
         boolean newTradingDay = !eventDay.equals(previousTradingDay);
         if (newTradingDay) {
+            tradingDayIndex = tradingDayIndexAt(eventDay, previousTradingDay);
             tradingDay = eventDay;
-            tradingDayIndex++;
             sessionOpen = first(event.values(), "open30m", "open", "price", "close");
         }
         if (sessionOpen != null) {
@@ -91,6 +94,28 @@ final class BasicMarketSignalState {
         }
         series.forEach((resolution, item) -> item.publish(values));
         return Map.copyOf(values);
+    }
+
+    private long tradingDayIndexAt(LocalDate eventDay, LocalDate previousTradingDay) {
+        if (eventDay.isBefore(executionEligibleDate)) {
+            throw new IllegalArgumentException(
+                    "market event predates execution eligibility: " + eventDay);
+        }
+        if (previousTradingDay != null && eventDay.isAfter(previousTradingDay)) {
+            return tradingDayIndex
+                    + tradingDaysBetween(previousTradingDay.plusDays(1), eventDay);
+        }
+        return tradingDaysBetween(executionEligibleDate, eventDay);
+    }
+
+    private static long tradingDaysBetween(LocalDate firstDate, LocalDate lastDate) {
+        long count = 0;
+        for (LocalDate date = firstDate; !date.isAfter(lastDate); date = date.plusDays(1)) {
+            if (isRegularTradingDay(date)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static boolean flag(Map<String, BigDecimal> values, String key) {

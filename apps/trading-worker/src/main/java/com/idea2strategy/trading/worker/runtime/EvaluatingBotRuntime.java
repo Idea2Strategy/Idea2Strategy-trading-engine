@@ -530,7 +530,8 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         }
 
         private BasicMarketSignalState signalState(UUID instrumentId) {
-            return signalStates.computeIfAbsent(instrumentId, ignored -> new BasicMarketSignalState());
+            return signalStates.computeIfAbsent(
+                    instrumentId, ignored -> new BasicMarketSignalState(window.eligibleFrom()));
         }
 
         private PositionTracker positionTracker(UUID instrumentId, PositionSnapshot snapshot) {

@@ -17,7 +17,7 @@ class BasicMarketSignalStateTest {
 
     @Test
     void publishesOnlyFinalizedStrategyCandles() {
-        BasicMarketSignalState state = new BasicMarketSignalState();
+        BasicMarketSignalState state = stateEligibleFrom("2026-08-07T13:30:00Z");
 
         Map<String, String> first = state.accept(ready(
                 1, "2026-08-07T14:00:00Z", "100", "10", false));
@@ -36,7 +36,7 @@ class BasicMarketSignalStateTest {
 
     @Test
     void emitsOneScheduleTriggerPerObservedTradingDay() {
-        BasicMarketSignalState state = new BasicMarketSignalState();
+        BasicMarketSignalState state = stateEligibleFrom("2026-08-03T13:30:00Z");
 
         Map<String, String> first = state.accept(ready(
                 1, "2026-08-03T14:00:00Z", "100", "10", false));
@@ -52,6 +52,22 @@ class BasicMarketSignalStateTest {
         assertEquals("2", nextDay.get("schedule.tradingDayIndex"));
     }
 
+    @Test
+    void tradingDayIndexSurvivesARestart() {
+        BasicMarketSignalState beforeRestart = stateEligibleFrom("2025-11-24T14:30:00Z");
+        beforeRestart.accept(ready(
+                1, "2025-11-24T14:30:00Z", "100", "10", false));
+        beforeRestart.accept(ready(
+                2, "2025-11-26T14:30:00Z", "101", "10", false));
+
+        BasicMarketSignalState afterRestart = stateEligibleFrom("2025-11-24T14:30:00Z");
+        Map<String, String> resumed = afterRestart.accept(ready(
+                3, "2025-12-01T14:30:00Z", "102", "10", false));
+
+        // Nov 24, 25, 26, 28, and Dec 1 are the five NYSE sessions in this period.
+        assertEquals("5", resumed.get("schedule.tradingDayIndex"));
+    }
+
     /**
      * The session closes when its daily candle does, whatever the clock says.
      *
@@ -62,7 +78,7 @@ class BasicMarketSignalStateTest {
      */
     @Test
     void closesTheSessionWhenTheDailyCandleCloses() {
-        BasicMarketSignalState state = new BasicMarketSignalState();
+        BasicMarketSignalState state = stateEligibleFrom("2025-11-28T14:30:00Z");
 
         // 2025-11-28, the day after Thanksgiving: the session ends 18:00Z, which is 13:00 ET.
         Map<String, String> beforeEarlyClose = state.accept(ready(
@@ -76,7 +92,7 @@ class BasicMarketSignalStateTest {
 
     @Test
     void doesNotCloseTheSessionAtAnHourThatOnlyUsuallyEndsIt() {
-        BasicMarketSignalState state = new BasicMarketSignalState();
+        BasicMarketSignalState state = stateEligibleFrom("2025-12-01T14:30:00Z");
 
         // 21:00Z is 16:00 ET, the usual close -- but this event's daily candle did not finalize,
         // so the session has not ended and the hour alone must not say that it has.
@@ -88,12 +104,16 @@ class BasicMarketSignalStateTest {
 
     @Test
     void closesTheSessionOnARegularDayToo() {
-        BasicMarketSignalState state = new BasicMarketSignalState();
+        BasicMarketSignalState state = stateEligibleFrom("2025-12-01T14:30:00Z");
 
         Map<String, String> values = state.accept(ready(
                 1, "2025-12-01T21:00:00Z", "100", "10", true, true));
 
         assertEquals("true", values.get("session.close"));
+    }
+
+    private static BasicMarketSignalState stateEligibleFrom(String at) {
+        return new BasicMarketSignalState(Instant.parse(at));
     }
 
     private static MarketEventEnvelope ready(
