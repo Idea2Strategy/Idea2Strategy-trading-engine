@@ -118,7 +118,7 @@ public final class OfficialFeatureCatalog {
      * and the reproducibility hash — D hit exactly this and fixed it the same way, so one number
      * cannot produce two hashes.
      */
-    static BigDecimal quantize(BigDecimal value) {
+    public static BigDecimal quantize(BigDecimal value) {
         BigDecimal quantized = value.setScale(VALUE_SCALE, RoundingMode.HALF_EVEN);
         return quantized.signum() == 0 ? quantized.abs() : quantized;
     }

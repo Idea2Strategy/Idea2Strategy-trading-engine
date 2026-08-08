@@ -68,7 +68,14 @@ final class BasicMarketSignalState {
                         || !YearMonth.from(previousTradingDay).equals(YearMonth.from(eventDay)))));
         values.put("schedule.monthLastTradingDay", Boolean.toString(newTradingDay
                 && eventDay.equals(lastTradingDay(YearMonth.from(eventDay)))));
-        boolean sessionClose = marketTime.getHour() == 16 && marketTime.getMinute() < 2;
+        /* The session's own close, taken from the calendar rather than from the clock. The daily
+           candle is finalized at the session close, so closed1d is true on exactly the session's
+           last boundary. A fixed 16:00 test was wrong on every early close - the day after
+           Thanksgiving, Christmas Eve, July 3 all close at 13:00 ET - so on those days live never
+           published session.close at all and a SESSION_CLOSE exit silently did not run, while the
+           backtest, which reads the session's real closesAt, exited as written. */
+        boolean sessionClose = event.eventType() == MarketEventType.MARKET_EVALUATION_READY
+                && flag(event.values(), "closed1d");
         values.put("session.close", Boolean.toString(sessionClose));
 
         if (event.eventType() == MarketEventType.MARKET_EVALUATION_READY) {

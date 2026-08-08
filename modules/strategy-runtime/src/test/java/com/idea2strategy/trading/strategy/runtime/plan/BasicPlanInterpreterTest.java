@@ -12,6 +12,8 @@ import com.idea2strategy.trading.strategy.runtime.basic.BasicExecutionResult;
 import com.idea2strategy.trading.strategy.runtime.basic.BasicInstrumentInput;
 import com.idea2strategy.trading.strategy.runtime.basic.BasicOrderSide;
 import com.idea2strategy.trading.strategy.runtime.basic.BasicStrategyExecutor;
+import com.idea2strategy.trading.strategy.runtime.feature.OfficialFeatureCatalog;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -193,6 +195,41 @@ class BasicPlanInterpreterTest {
 
         // previous = 50 (flat, neutral) never sat below the threshold, so no crossing happened.
         assertNotEquals(BasicDecisionStatus.CANDIDATE, result.decisions().getFirst().status());
+    }
+
+    /**
+     * The value live publishes for RSI_14 must be the official definition's value, not a second
+     * implementation that happens to be close. This one ran at 18 significant digits with HALF_UP
+     * and never quantized, where {@code rsi:1.0.0} is 34 digits with HALF_EVEN quantized to 8 — so a
+     * window sitting a rounding step from the threshold crossed it live and not in the backtest,
+     * which reads the series that definition published.
+     */
+    @Test
+    void rsi14IsTheOfficialCatalogValueRatherThanASecondImplementation() {
+        var plan = interpreter.interpret(directPlan("RSI_CROSS",
+                "\"resolution\":\"30m\",\"direction\":\"UP\",\"period\":\"14\",\"threshold\":\"30\"", "BUY"));
+        // Sixteen closes with uneven moves, so the ratio does not terminate and the two roundings
+        // cannot coincide by luck.
+        List<BigDecimal> closes = List.of(
+                "100", "101.37", "100.42", "102.9", "101.11", "103.68", "102.05", "104.33",
+                "103.7", "105.29", "104.02", "106.55", "105.13", "107.87", "106.4", "108.26")
+                .stream().map(BigDecimal::new).toList();
+        String series = closes.stream().map(BigDecimal::toPlainString).reduce((a, b) -> a + "," + b).orElseThrow();
+
+        BasicExecutionResult result = executor.execute(new BasicExecutionRequest(
+                EVALUATION, plan.flows(), Map.of(INSTRUMENT, new BasicInstrumentInput(INSTRUMENT,
+                        Map.of("bar.closed.30m", "true", "closes.30m", series)))));
+
+        // The newest window is the last fifteen closes; the one before it drops the newest bar.
+        BigDecimal expectedCurrent = OfficialFeatureCatalog.RSI_14.compute(closes.subList(1, 16));
+        BigDecimal expectedPrevious = OfficialFeatureCatalog.RSI_14.compute(closes.subList(0, 15));
+        Map<String, String> evidence = result.decisions().getFirst().trace().getFirst().evidence();
+
+        assertAll(
+                () -> assertEquals(
+                        expectedCurrent.stripTrailingZeros().toPlainString(), evidence.get("current")),
+                () -> assertEquals(
+                        expectedPrevious.stripTrailingZeros().toPlainString(), evidence.get("previous")));
     }
 
     @Test
