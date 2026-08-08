@@ -77,6 +77,8 @@ public final class BasicPlanInterpreter {
             "1회만", "주기마다", "대기 후 재진입", "대기 후 재실행");
     private static final Set<String> WAIT_MODES = Set.of("조건 재충족", "N봉 이후", "N거래일 이후");
     private static final MathContext MATH = new MathContext(18, RoundingMode.HALF_UP);
+    /** Pinned by the official RSI_14 definition for a window with neither gains nor losses. */
+    private static final BigDecimal FLAT_WINDOW_RSI = BigDecimal.valueOf(50);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -669,7 +671,12 @@ public final class BasicPlanInterpreter {
             }
         }
         if (losses.signum() == 0) {
-            return gains.signum() == 0 ? BigDecimal.ZERO : BigDecimal.valueOf(100);
+            /* A perfectly flat window has no relative strength to compute, so the value is a
+               convention rather than a result. The official RSI_14 definition pins it to the
+               neutral 50 — a market that did not move is not a market that only rose — and the
+               backtest reads that definition's published series instead of recomputing. Returning
+               0 here made the same strategy oversold live and neutral in its own backtest. */
+            return gains.signum() == 0 ? FLAT_WINDOW_RSI : BigDecimal.valueOf(100);
         }
         BigDecimal relativeStrength = gains.divide(losses, MATH);
         return BigDecimal.valueOf(100).subtract(BigDecimal.valueOf(100)
