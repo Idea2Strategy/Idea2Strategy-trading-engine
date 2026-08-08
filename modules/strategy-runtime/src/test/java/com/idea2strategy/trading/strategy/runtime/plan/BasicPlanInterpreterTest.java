@@ -2,6 +2,7 @@ package com.idea2strategy.trading.strategy.runtime.plan;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -173,6 +174,25 @@ class BasicPlanInterpreterTest {
             assertEquals("step-1:" + operation,
                     plan.flows().getFirst().conditionSteps().getFirst().stepId());
         });
+    }
+
+    /* A window with neither gains nor losses has no relative strength, so the official RSI_14
+       definition pins it to the neutral 50 and the backtest reads that published series. Returning
+       0 here instead made a flat window look maximally oversold, so an upward crossing fired live
+       for a strategy whose own backtest showed nothing — the divergence in its worst direction. */
+    @Test
+    void aFlatRsiWindowIsNeutralRatherThanOversold() {
+        var plan = interpreter.interpret(directPlan("RSI_CROSS",
+                "\"resolution\":\"30m\",\"direction\":\"UP\",\"period\":\"14\",\"threshold\":\"30\"", "BUY"));
+        // Sixteen closes: the previous window is perfectly flat, the current one rises once.
+        String closes = "100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,101";
+
+        BasicExecutionResult result = executor.execute(new BasicExecutionRequest(
+                EVALUATION, plan.flows(), Map.of(INSTRUMENT, new BasicInstrumentInput(INSTRUMENT,
+                        Map.of("bar.closed.30m", "true", "closes.30m", closes)))));
+
+        // previous = 50 (flat, neutral) never sat below the threshold, so no crossing happened.
+        assertNotEquals(BasicDecisionStatus.CANDIDATE, result.decisions().getFirst().status());
     }
 
     @Test
