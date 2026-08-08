@@ -662,14 +662,14 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         }
     }
 
-    private static final class PositionTracker {
+    static final class PositionTracker {
         private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
         private final BigDecimal averageEntryPrice;
         private final Instant openedAt;
         private BigDecimal peakPrice;
         private final Map<String, Long> closedBars = new LinkedHashMap<>();
 
-        private PositionTracker(PositionSnapshot snapshot) {
+        PositionTracker(PositionSnapshot snapshot) {
             this.averageEntryPrice = snapshot.averageEntryPrice();
             this.openedAt = snapshot.openedAt();
             this.peakPrice = averageEntryPrice;
@@ -680,7 +680,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                     && openedAt.equals(snapshot.openedAt());
         }
 
-        private void publish(
+        void publish(
                 Map<String, String> values,
                 PositionSnapshot snapshot,
                 BigDecimal price,
@@ -707,12 +707,22 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                     Long.toString(tradingWeekdaysBetween(opened, current)));
         }
 
+        /**
+         * A published position metric, under {@code precision:1.0.0}: 8 fractional digits,
+         * HALF_EVEN.
+         *
+         * <p>HALF_UP here was the wrong half of a pair. These values are what a
+         * {@code POSITION_RETURN} step compares against a threshold, and the backtest quantizes
+         * them HALF_EVEN as the precision rules require, so an exact tie at the ninth decimal
+         * produced two different published numbers for one position — and the rendered form
+         * reaches the step trace, so it produced two different traces as well.
+         */
         private static BigDecimal percentage(BigDecimal numerator, BigDecimal denominator) {
             if (denominator.signum() == 0) {
                 return BigDecimal.ZERO;
             }
             return numerator.multiply(BigDecimal.valueOf(100))
-                    .divide(denominator, 8, java.math.RoundingMode.HALF_UP);
+                    .divide(denominator, 8, java.math.RoundingMode.HALF_EVEN);
         }
 
         private static long tradingWeekdaysBetween(LocalDate start, LocalDate end) {
