@@ -29,7 +29,8 @@ public record CandidateOrder(
         CandidateAllocation allocation,
         BigDecimal referencePrice,
         BigDecimal limitPrice,
-        List<String> reasonCodes) {
+        List<String> reasonCodes,
+        Integer positionPercent) {
 
     public CandidateOrder {
         candidateId = Objects.requireNonNull(candidateId, "candidateId");
@@ -52,7 +53,26 @@ public record CandidateOrder(
                                 + "position held");
             }
         }
+        if (positionPercent != null
+                && (!"SELL".equals(side) || positionPercent < 1 || positionPercent > 100)) {
+            throw new IllegalArgumentException(
+                    "positionPercent is allowed only for SELL and must be between 1 and 100");
+        }
         reasonCodes = List.copyOf(Objects.requireNonNull(reasonCodes, "reasonCodes"));
+    }
+
+    public CandidateOrder(
+            UUID candidateId,
+            UUID instrumentId,
+            UUID flowId,
+            String side,
+            BigDecimal quantity,
+            CandidateAllocation allocation,
+            BigDecimal referencePrice,
+            BigDecimal limitPrice,
+            List<String> reasonCodes) {
+        this(candidateId, instrumentId, flowId, side, quantity, allocation, referencePrice,
+                limitPrice, reasonCodes, null);
     }
 
     /** The unscoped shape, kept for candidates that arrive on schema version 1. */
@@ -81,5 +101,9 @@ public record CandidateOrder(
     /** The share of spendable cash a version 3 buy claims. */
     public Optional<CandidateAllocation> allocationShare() {
         return Optional.ofNullable(allocation);
+    }
+
+    public Optional<Integer> requestedPositionPercent() {
+        return Optional.ofNullable(positionPercent);
     }
 }

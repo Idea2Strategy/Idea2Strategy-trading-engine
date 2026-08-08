@@ -35,13 +35,20 @@ public class EvaluationRuntimeConfiguration {
     }
 
     @Bean
+    PostgresExecutionGateStateSource executionGateStateSource(JdbcClient jdbc) {
+        return new PostgresExecutionGateStateSource(jdbc);
+    }
+
+    @Bean
     EvaluatingBotRuntime evaluatingBotRuntime(
             CandidateBatchProcessor processor,
             OrderCandidateBatchAdapter adapter,
             PostgresBotScopeResolver scopeResolver,
             PostgresEvaluationRunRecorder runRecorder,
-            PostgresPositionMetricSource positionMetricSource) {
+            PostgresPositionMetricSource positionMetricSource,
+            PostgresExecutionGateStateSource executionGateStateSource) {
         return new EvaluatingBotRuntime(
-                processor, adapter, scopeResolver, runRecorder, positionMetricSource);
+                processor, adapter, scopeResolver, runRecorder,
+                positionMetricSource, executionGateStateSource);
     }
 }

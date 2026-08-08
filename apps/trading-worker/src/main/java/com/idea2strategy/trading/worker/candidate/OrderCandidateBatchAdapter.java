@@ -30,7 +30,7 @@ public final class OrderCandidateBatchAdapter {
 
     public CandidateBatch toDomain(OrderCandidateBatch source) {
         int version = source.schemaVersion();
-        if (version < MINIMUM_SCHEMA_VERSION || version > OrderCandidateBatch.ALLOCATION_SCHEMA_VERSION) {
+        if (version < MINIMUM_SCHEMA_VERSION || version > OrderCandidateBatch.PARTIAL_POSITION_SCHEMA_VERSION) {
             throw new IllegalArgumentException(
                     "Unsupported order candidate batch schema version: " + version);
         }
@@ -76,6 +76,19 @@ public final class OrderCandidateBatchAdapter {
                     "schema version " + version + " BUY candidate " + candidate.candidateId()
                             + " must carry an allocation share");
         }
+        if (version < OrderCandidateBatch.PARTIAL_POSITION_SCHEMA_VERSION
+                && candidate.requestedPositionPercent().isPresent()) {
+            throw new IllegalArgumentException(
+                    "schema version " + version + " candidate " + candidate.candidateId()
+                            + " must not carry a position percentage");
+        }
+        if (version >= OrderCandidateBatch.PARTIAL_POSITION_SCHEMA_VERSION
+                && candidate.side() == OrderSide.SELL
+                && candidate.requestedPositionPercent().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "schema version " + version + " SELL candidate " + candidate.candidateId()
+                            + " must carry a position percentage");
+        }
     }
 
     private CandidateOrder toDomain(OrderCandidate source) {
@@ -90,6 +103,7 @@ public final class OrderCandidateBatchAdapter {
                         .orElse(null),
                 source.referencePrice(),
                 source.limitPrice(),
-                source.reasonCodes());
+                source.reasonCodes(),
+                source.positionPercent());
     }
 }

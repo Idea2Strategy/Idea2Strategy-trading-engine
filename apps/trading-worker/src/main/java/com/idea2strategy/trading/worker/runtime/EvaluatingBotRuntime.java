@@ -46,6 +46,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -88,6 +89,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
     private final BotScopeResolver scopeResolver;
     private final EvaluationRunRecorder runRecorder;
     private final PositionMetricSource positionMetricSource;
+    private final ExecutionGateStateSource executionGateStateSource;
     private final BasicPlanInterpreter interpreter = new BasicPlanInterpreter();
     private final BasicStrategyExecutor executor = new BasicStrategyExecutor();
     private final BasicCandidateConverger converger = new BasicCandidateConverger();
@@ -98,7 +100,8 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             OrderCandidateBatchAdapter adapter,
             BotScopeResolver scopeResolver,
             EvaluationRunRecorder runRecorder) {
-        this(processor, adapter, scopeResolver, runRecorder, PositionMetricSource.none());
+        this(processor, adapter, scopeResolver, runRecorder,
+                PositionMetricSource.none(), ExecutionGateStateSource.none());
     }
 
     public EvaluatingBotRuntime(
@@ -107,11 +110,24 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             BotScopeResolver scopeResolver,
             EvaluationRunRecorder runRecorder,
             PositionMetricSource positionMetricSource) {
+        this(processor, adapter, scopeResolver, runRecorder,
+                positionMetricSource, ExecutionGateStateSource.none());
+    }
+
+    public EvaluatingBotRuntime(
+            CandidateBatchProcessor processor,
+            OrderCandidateBatchAdapter adapter,
+            BotScopeResolver scopeResolver,
+            EvaluationRunRecorder runRecorder,
+            PositionMetricSource positionMetricSource,
+            ExecutionGateStateSource executionGateStateSource) {
         this.processor = Objects.requireNonNull(processor, "processor");
         this.adapter = Objects.requireNonNull(adapter, "adapter");
         this.scopeResolver = Objects.requireNonNull(scopeResolver, "scopeResolver");
         this.runRecorder = Objects.requireNonNull(runRecorder, "runRecorder");
         this.positionMetricSource = Objects.requireNonNull(positionMetricSource, "positionMetricSource");
+        this.executionGateStateSource =
+                Objects.requireNonNull(executionGateStateSource, "executionGateStateSource");
     }
 
     @Override
@@ -229,7 +245,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                     evaluationId, bot.plan().flows(),
                     inputsFor(bot, event, snapshot, price, marketValues)));
             BasicCandidateConvergenceResult converged =
-                    converger.converge(evaluationId, acceptedOf(execution, evaluationId));
+                    converger.converge(evaluationId, acceptedOf(bot, execution, evaluationId, event));
             if (converged.acceptedCandidates().isEmpty()) {
                 return Optional.empty();
             }
@@ -309,18 +325,36 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         return inputs;
     }
 
-    private List<BasicOrderCandidate> acceptedOf(BasicExecutionResult execution, UUID evaluationId) {
+    private List<BasicOrderCandidate> acceptedOf(
+            RegisteredBot bot,
+            BasicExecutionResult execution,
+            UUID evaluationId,
+            MarketEventEnvelope event) {
         List<BasicOrderCandidate> candidates = new ArrayList<>();
         execution.decisions().stream()
-                .filter(decision -> decision.status() == BasicDecisionStatus.CANDIDATE)
-                .forEach(decision -> candidates.add(new BasicOrderCandidate(
+                .filter(decision -> decision.instrumentId().equals(event.instrumentId()))
+                .forEach(decision -> {
+                    BasicPlanInterpreter.ExecutionPolicy policy =
+                            bot.plan().executionPolicyByFlowKey().get(decision.flowId());
+                    if (!bot.executionGate(
+                                    decision.flowId(),
+                                    decision.instrumentId(),
+                                    () -> executionGateStateSource.resolve(
+                                            bot.botId(), decision.flowId(), decision.instrumentId()))
+                            .accepts(decision.status(), policy, event.occurredAt())) {
+                        return;
+                    }
+                    candidates.add(new BasicOrderCandidate(
                         derived("candidate",
                                 evaluationId + ":" + decision.flowId() + ":" + decision.instrumentId()),
                         decision.flowId(),
                         decision.instrumentId(),
                         decision.side(),
                         decision.buyAllocation(),
-                        Map.of("evaluationId", evaluationId.toString()))));
+                        Map.of(
+                                "evaluationId", evaluationId.toString(),
+                                "orderPercent", Integer.toString(policy.orderPercent()))));
+                });
         return candidates;
     }
 
@@ -341,18 +375,19 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             BigDecimal referencePrice) {
         List<OrderCandidate> candidates = new ArrayList<>();
         for (BasicOrderCandidate candidate : converged.acceptedCandidates()) {
+            int orderPercent = Integer.parseInt(candidate.actionParameters().get("orderPercent"));
             candidates.add(candidate.side() == BasicOrderSide.BUY
                     ? OrderCandidate.allocatedBuy(
                             candidate.candidateId(), candidate.instrumentId(), scope.flowId(),
-                            candidate.buyAllocation().orElseThrow().numerator(),
-                            candidate.buyAllocation().orElseThrow().denominator(),
+                            candidate.buyAllocation().orElseThrow().numerator() * orderPercent,
+                            candidate.buyAllocation().orElseThrow().denominator() * 100,
                             referencePrice, null, List.of("BASIC_RULE_MATCHED"))
-                    : OrderCandidate.heldSell(
+                    : OrderCandidate.partialHeldSell(
                             candidate.candidateId(), candidate.instrumentId(), scope.flowId(),
-                            referencePrice, null, List.of("BASIC_RULE_MATCHED")));
+                            orderPercent, referencePrice, null, List.of("BASIC_RULE_MATCHED")));
         }
         return new OrderCandidateBatch(
-                OrderCandidateBatch.ALLOCATION_SCHEMA_VERSION,
+                OrderCandidateBatch.PARTIAL_POSITION_SCHEMA_VERSION,
                 derived("candidate-batch", bot.botId() + ":" + event.eventId()),
                 evaluationId,
                 bot.botId(),
@@ -449,6 +484,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         private final EvaluationWindow window;
         private final Map<UUID, BasicMarketSignalState> signalStates = new LinkedHashMap<>();
         private final Map<UUID, PositionTracker> positionTrackers = new LinkedHashMap<>();
+        private final Map<String, ExecutionGate> executionGates = new LinkedHashMap<>();
 
         private RegisteredBot(
                 UUID botId,
@@ -498,12 +534,100 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         }
 
         private PositionTracker positionTracker(UUID instrumentId, PositionSnapshot snapshot) {
-            return positionTrackers.compute(instrumentId, (ignored, current) ->
-                    current != null && current.matches(snapshot) ? current : new PositionTracker(snapshot));
+            PositionTracker current = positionTrackers.get(instrumentId);
+            if (current != null && current.matches(snapshot)) {
+                return current;
+            }
+            clearExecutionGates(instrumentId);
+            PositionTracker replacement = new PositionTracker(snapshot);
+            positionTrackers.put(instrumentId, replacement);
+            return replacement;
         }
 
         private void clearPositionTracker(UUID instrumentId) {
-            positionTrackers.remove(instrumentId);
+            if (positionTrackers.remove(instrumentId) != null) {
+                clearExecutionGates(instrumentId);
+            }
+        }
+
+        private ExecutionGate executionGate(
+                String flowId, UUID instrumentId, Supplier<ExecutionGateSnapshot> snapshot) {
+            return executionGates.computeIfAbsent(
+                    flowId + ":" + instrumentId, ignored -> new ExecutionGate(snapshot.get()));
+        }
+
+        private void clearExecutionGates(UUID instrumentId) {
+            String suffix = ":" + instrumentId;
+            executionGates.keySet().removeIf(key -> key.endsWith(suffix));
+        }
+    }
+
+    static final class ExecutionGate {
+        private int executions;
+        private int barsSinceExecution;
+        private Instant lastExecutionAt;
+        private boolean conditionRearmed = true;
+
+        ExecutionGate() {
+            this(ExecutionGateSnapshot.empty());
+        }
+
+        ExecutionGate(ExecutionGateSnapshot snapshot) {
+            Objects.requireNonNull(snapshot, "snapshot");
+            executions = snapshot.executions();
+            lastExecutionAt = snapshot.lastExecutionAt();
+            conditionRearmed = executions == 0;
+        }
+
+        boolean accepts(
+                BasicDecisionStatus status,
+                BasicPlanInterpreter.ExecutionPolicy policy,
+                Instant occurredAt) {
+            if (lastExecutionAt != null) {
+                barsSinceExecution++;
+            }
+            if (status != BasicDecisionStatus.CANDIDATE) {
+                if (status == BasicDecisionStatus.CONDITION_NOT_MET) {
+                    conditionRearmed = true;
+                }
+                return false;
+            }
+            int limit = policy.executionMode().equals("1회만")
+                    ? 1
+                    : policy.maxExecutions();
+            if (executions >= limit) {
+                return false;
+            }
+            boolean eligible = executions == 0
+                    || policy.executionMode().equals("주기마다")
+                    || switch (policy.waitMode()) {
+                        case "조건 재충족" -> conditionRearmed;
+                        case "N봉 이후" -> barsSinceExecution >= policy.waitInterval();
+                        case "N거래일 이후" -> tradingDaysSince(lastExecutionAt, occurredAt)
+                                >= policy.waitInterval();
+                        default -> false;
+                    };
+            if (!eligible) {
+                return false;
+            }
+            executions++;
+            barsSinceExecution = 0;
+            lastExecutionAt = occurredAt;
+            conditionRearmed = false;
+            return true;
+        }
+
+        private static long tradingDaysSince(Instant start, Instant end) {
+            LocalDate cursor = start.atZone(ZoneId.of("America/New_York")).toLocalDate();
+            LocalDate through = end.atZone(ZoneId.of("America/New_York")).toLocalDate();
+            long days = 0;
+            while (cursor.isBefore(through)) {
+                cursor = cursor.plusDays(1);
+                if (cursor.getDayOfWeek().getValue() <= 5) {
+                    days++;
+                }
+            }
+            return days;
         }
     }
 
@@ -639,6 +763,31 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
 
         static PositionMetricSource none() {
             return (botId, instrumentId) -> Optional.empty();
+        }
+    }
+
+    /** Restores a flow's execution limiter from canonical intents in the current position cycle. */
+    public interface ExecutionGateStateSource {
+        ExecutionGateSnapshot resolve(UUID botId, String flowKey, UUID instrumentId);
+
+        static ExecutionGateStateSource none() {
+            return (botId, flowKey, instrumentId) -> ExecutionGateSnapshot.empty();
+        }
+    }
+
+    public record ExecutionGateSnapshot(int executions, Instant lastExecutionAt) {
+        public ExecutionGateSnapshot {
+            if (executions < 0) {
+                throw new IllegalArgumentException("executions must not be negative");
+            }
+            if ((executions == 0) != (lastExecutionAt == null)) {
+                throw new IllegalArgumentException(
+                        "lastExecutionAt must exist exactly when executions are present");
+            }
+        }
+
+        static ExecutionGateSnapshot empty() {
+            return new ExecutionGateSnapshot(0, null);
         }
     }
 
