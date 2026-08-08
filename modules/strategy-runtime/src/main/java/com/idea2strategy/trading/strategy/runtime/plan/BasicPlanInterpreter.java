@@ -77,6 +77,8 @@ public final class BasicPlanInterpreter {
             "1회만", "주기마다", "대기 후 재진입", "대기 후 재실행");
     private static final Set<String> WAIT_MODES = Set.of("조건 재충족", "N봉 이후", "N거래일 이후");
     private static final MathContext MATH = new MathContext(18, RoundingMode.HALF_UP);
+    /** The precision every official feature computation uses: {@code decimal128}, HALF_EVEN. */
+    private static final MathContext FEATURE_MATH = OfficialFeatureCatalog.WORKING_PRECISION;
     /** Pinned by the official RSI_14 definition for a window with neither gains nor losses. */
     private static final BigDecimal FLAT_WINDOW_RSI = BigDecimal.valueOf(50);
 
@@ -657,30 +659,55 @@ public final class BasicPlanInterpreter {
         return numerator.multiply(BigDecimal.valueOf(100), MATH).divide(denominator, MATH);
     }
 
+    /**
+     * The RSI of the window ending {@code offset} bars from the newest close.
+     *
+     * <p>For the period the official catalog defines this delegates to that definition rather than
+     * reproducing it. Two implementations that merely agree are not the same feature: this one ran
+     * at 18 significant digits with HALF_UP and never quantized, while {@code rsi:1.0.0} is 34
+     * digits with HALF_EVEN quantized to 8, and the backtest reads the series that definition
+     * published. A window whose RSI sits a rounding step from the threshold crossed it on one side
+     * and not the other, which is exactly the disagreement a released bot may not have with its own
+     * backtest.
+     */
     private static BigDecimal rsi(List<BigDecimal> closes, int period, int offset) {
         int end = closes.size() - offset;
         int start = end - period - 1;
-        BigDecimal gains = BigDecimal.ZERO;
-        BigDecimal losses = BigDecimal.ZERO;
-        for (int index = start + 1; index < end; index++) {
-            BigDecimal change = closes.get(index).subtract(closes.get(index - 1));
+        List<BigDecimal> window = closes.subList(start, end);
+        if (period == OfficialFeatureCatalog.RSI_14.periods()) {
+            return OfficialFeatureCatalog.RSI_14.compute(window);
+        }
+        /* No catalog definition exists for any other period, so there is no published series to
+           read and nothing to delegate to. The same procedure is applied at the same precision so a
+           period the catalog has not yet defined cannot diverge in rounding either. */
+        BigDecimal gainTotal = BigDecimal.ZERO;
+        BigDecimal lossTotal = BigDecimal.ZERO;
+        for (int index = 1; index < window.size(); index++) {
+            BigDecimal change = window.get(index).subtract(window.get(index - 1), FEATURE_MATH);
             if (change.signum() > 0) {
-                gains = gains.add(change);
-            } else {
-                losses = losses.add(change.abs());
+                gainTotal = gainTotal.add(change, FEATURE_MATH);
+            } else if (change.signum() < 0) {
+                lossTotal = lossTotal.subtract(change, FEATURE_MATH);
             }
         }
-        if (losses.signum() == 0) {
+        BigDecimal periods = BigDecimal.valueOf(period);
+        BigDecimal averageGain = gainTotal.divide(periods, FEATURE_MATH);
+        BigDecimal averageLoss = lossTotal.divide(periods, FEATURE_MATH);
+        BigDecimal value;
+        if (averageLoss.signum() == 0) {
             /* A perfectly flat window has no relative strength to compute, so the value is a
-               convention rather than a result. The official RSI_14 definition pins it to the
-               neutral 50 — a market that did not move is not a market that only rose — and the
-               backtest reads that definition's published series instead of recomputing. Returning
-               0 here made the same strategy oversold live and neutral in its own backtest. */
-            return gains.signum() == 0 ? FLAT_WINDOW_RSI : BigDecimal.valueOf(100);
+               convention rather than a result. The official definition pins it to the neutral 50 —
+               a market that did not move is not a market that only rose. Returning 0 here made the
+               same strategy oversold live and neutral in its own backtest. */
+            value = averageGain.signum() == 0 ? FLAT_WINDOW_RSI : BigDecimal.valueOf(100);
+        } else {
+            BigDecimal relativeStrength = averageGain.divide(averageLoss, FEATURE_MATH);
+            value = BigDecimal.valueOf(100).subtract(
+                    BigDecimal.valueOf(100).divide(
+                            BigDecimal.ONE.add(relativeStrength, FEATURE_MATH), FEATURE_MATH),
+                    FEATURE_MATH);
         }
-        BigDecimal relativeStrength = gains.divide(losses, MATH);
-        return BigDecimal.valueOf(100).subtract(BigDecimal.valueOf(100)
-                .divide(BigDecimal.ONE.add(relativeStrength), MATH));
+        return OfficialFeatureCatalog.quantize(value);
     }
 
     private static List<BigDecimal> macdHistogram(
