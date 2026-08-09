@@ -50,7 +50,7 @@ public final class HttpAlpacaThirtyMinuteBarsClient implements AlpacaThirtyMinut
         String query = "symbols=" + encode(symbols)
                 + "&timeframe=30Min&start=" + encode(session.opensAt().toString())
                 + "&end=" + encode(throughBoundary.toString())
-                + "&limit=10000&feed=sip&adjustment=raw&sort=asc";
+                + "&limit=10000&feed=sip&adjustment=all&sort=asc";
         HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint + "?" + query))
                 .header("APCA-API-KEY-ID", credentials.apiKey())
                 .header("APCA-API-SECRET-KEY", credentials.apiSecret())
