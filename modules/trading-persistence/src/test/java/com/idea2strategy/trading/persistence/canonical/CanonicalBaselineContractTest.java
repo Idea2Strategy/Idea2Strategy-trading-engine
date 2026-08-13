@@ -58,17 +58,10 @@ class CanonicalBaselineContractTest {
     }
 
     @Test
-    void theBaselineIncludesTheBacktestRuntimeOwnershipMigrations() {
-        assertTrue(
-                CanonicalBaseline.presentMigrations().containsAll(List.of(
-                        "V20260804160000__backtest_runtime_ownership_expand.sql",
-                        "V20260804160010__backend_backtest_competition_link.sql",
-                        "V20260804160020__pipeline_dataset_manifest_empty_hash.sql",
-                        "V20260804160100__backtest_runtime_ownership_constrain.sql",
-                        "V20260805010000__pipeline_upgrade_legacy_market_schema.sql",
-                        "V20260805130000__backtest_run_input_pins.sql",
-                        "V20260805153000__trading_add_candidate_batch_processing.sql")),
-                "the pinned baseline must include the central backtest runtime ownership migration set");
+    void theBaselineContainsOnlyTheRebasedV1AndRuntimeGrants() {
+        assertEquals(
+                List.of("R__database_runtime_grants.sql", "V1__initial_schema.sql"),
+                CanonicalBaseline.presentMigrations());
     }
 
     @Test
@@ -80,7 +73,7 @@ class CanonicalBaselineContractTest {
                 .param(APPLICATION_SCHEMAS.toArray(String[]::new))
                 .query(Integer.class)
                 .single();
-        assertEquals(179, tables, "the pinned canonical baseline no longer produces the canonical schema");
+        assertEquals(181, tables, "the pinned canonical baseline no longer produces the canonical schema");
     }
 
     @Test

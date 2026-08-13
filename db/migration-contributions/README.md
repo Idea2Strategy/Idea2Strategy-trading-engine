@@ -18,4 +18,6 @@ New canonical changes go through the following boundary:
 3. The central assembler verifies the pinned commit, owner, filename, digest, ordering, and table-level ownership before copying the contribution into its immutable bundle.
 4. The trading application starts only after that bundle has migrated and validated the database. It never invokes Flyway itself and Hibernate remains `validate`-only.
 
+The launch schema was rebased on 2026-08-13. All trading changes through that point are included in the immutable central `V1__initial_schema.sql`, so `migrations/` currently contains no timestamped migration. New development resumes with a fresh UTC-timestamped migration; the contribution contract and central Flyway assembly remain unchanged.
+
 The existing `modules/trading-persistence/src/main/resources/db/migration` files are private compatibility migrations for the pre-canonical persistence tests. They are intentionally preserved for F01-F14 reconstruction, but they are not canonical contributions and must not be copied into this directory or the central bundle.
