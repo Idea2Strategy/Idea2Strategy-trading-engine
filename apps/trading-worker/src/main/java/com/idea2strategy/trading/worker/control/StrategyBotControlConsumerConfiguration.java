@@ -1,7 +1,9 @@
 package com.idea2strategy.trading.worker.control;
 
 import com.idea2strategy.trading.application.stop.BotStopOrchestrator;
+import com.idea2strategy.trading.strategy.runtime.control.BotControlFailure;
 import com.idea2strategy.trading.strategy.runtime.control.BotStartupGate;
+import com.idea2strategy.trading.strategy.runtime.control.StrategyBotControlException;
 import com.idea2strategy.trading.strategy.runtime.control.StrategyBotContractCodec;
 import com.idea2strategy.trading.strategy.runtime.control.StrategyBotControlConsumer;
 import com.idea2strategy.trading.strategy.runtime.control.StrategyBotExecutionPlanAdapter;
@@ -13,7 +15,7 @@ import com.idea2strategy.trading.worker.stop.BotStopSettlementConfiguration;
 import com.idea2strategy.trading.worker.warmup.WarmupConfiguration;
 import java.time.Clock;
 import java.util.Map;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -37,20 +39,16 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * aggregate sequence does not move forward. What this configuration changes is that those decisions
  * now reach real evaluation and real settlement rather than a test double.
  *
- * <p>Gated on a configured warm-up bundle root, because a worker that cannot warm a bot up cannot
- * start one and must not accept the command that says to: C11's startup gate is fail-closed by design.
- * The gate is a property rather than a bean condition deliberately: {@code @ConditionalOnBean} outside
- * an auto-configuration is decided by bean registration order, and a silent ordering change must not be
- * what decides whether bots can start at all. Everything else is an ordinary dependency, so a worker
- * that declares a warm-up source but cannot settle a stop fails to start rather than accepting commands
- * it could not carry out.
+ * <p>Warm-up remains fail-closed for run commands, but it cannot gate this entire consumer: stopping a
+ * bot does not need market warm-up data. Without a verified bundle the fallback gate rejects only the
+ * run branch while stop commands still reach durable settlement. A configured but invalid bundle still
+ * fails application startup through {@link WarmupConfiguration}; it is never silently downgraded.
  *
  * <p>For the same reason {@code BotStopSettlementConfiguration} and {@code WarmupConfiguration} are
  * imported rather than left to the component scan: beans here depend on theirs, and importing makes
  * the order explicit instead of incidental.
  */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(prefix = "trading.warmup", name = "bundle-root")
 @Import({BotStopSettlementConfiguration.class, WarmupConfiguration.class})
 public class StrategyBotControlConsumerConfiguration {
 
@@ -108,9 +106,17 @@ public class StrategyBotControlConsumerConfiguration {
             StrategyBotSnapshotSource snapshotSource,
             OutboxReceiptBotControlCheckpointStore checkpointStore,
             StopSettlingBotLifecycle lifecycle,
-            BotStartupGate warmupGate,
+            ObjectProvider<BotStartupGate> warmupGate,
             ExecutionPlanCompatibility compatibility) {
         return new StrategyBotControlConsumer(
-                codec, snapshotSource, checkpointStore, lifecycle, warmupGate, compatibility);
+                codec, snapshotSource, checkpointStore, lifecycle, startupGate(warmupGate), compatibility);
+    }
+
+    static BotStartupGate startupGate(ObjectProvider<BotStartupGate> provider) {
+        return provider.getIfAvailable(() -> (request, starter) -> {
+            throw new StrategyBotControlException(
+                    BotControlFailure.EVALUATION_BLOCKED,
+                    "Bot startup is unavailable until a verified warm-up materialization is configured");
+        });
     }
 }

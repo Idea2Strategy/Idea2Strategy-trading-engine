@@ -23,6 +23,7 @@ import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -182,6 +183,9 @@ class BotStopSettlementPersistenceTest {
             statement.addBatch("delete from trading.system_close_actions");
             statement.addBatch(
                     "delete from bot.bot_events where event_type in (" + SETTLEMENT_EVENT_TYPES + ")");
+            statement.addBatch("update bot.bots set lifecycle_status = 'STOPPING', stopped_at = null, "
+                    + "lifecycle_changed_at = '2026-08-01T00:00:00+00', "
+                    + "updated_at = '2026-08-01T00:00:00+00'");
             statement.executeBatch();
             connection.commit();
         }
@@ -245,7 +249,9 @@ class BotStopSettlementPersistenceTest {
                         causationChainIsUnbroken(), "every settlement event names the one before it"),
                 () -> assertEquals(
                         Set.of(stopped.settlementId()), correlationIds(),
-                        "the settlement identifier correlates its whole stream"));
+                        "the settlement identifier correlates its whole stream"),
+                () -> assertEquals("STOPPED", lifecycleStatus(BOT)),
+                () -> assertEquals(T0.plusSeconds(1), stoppedAt(BOT)));
     }
 
     @Test
@@ -466,5 +472,20 @@ class BotStopSettlementPersistenceTest {
     private static int settlementEventCount() {
         return jdbc.sql("select count(*) from bot.bot_events where event_type in ("
                 + SETTLEMENT_EVENT_TYPES + ")").query(Integer.class).single();
+    }
+
+    private static String lifecycleStatus(UUID botId) {
+        return jdbc.sql("select lifecycle_status::text from bot.bots where id = :bot")
+                .param("bot", botId)
+                .query(String.class)
+                .single();
+    }
+
+    private static Instant stoppedAt(UUID botId) {
+        return jdbc.sql("select stopped_at from bot.bots where id = :bot")
+                .param("bot", botId)
+                .query(OffsetDateTime.class)
+                .single()
+                .toInstant();
     }
 }

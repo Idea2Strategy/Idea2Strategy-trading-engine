@@ -51,8 +51,10 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       already settling cannot create a second stream.
  * </ul>
  *
- * <p>This store never writes {@code bot.bots}. The lifecycle projection on that table belongs to
- * the backend service, and the write ownership tables put {@code bot.bots} there.
+ * <p>The terminal settlement event and the {@code bot.bots} lifecycle projection are committed in
+ * one transaction. Without that atomic projection a successfully settled bot can remain
+ * permanently visible as {@code STOPPING}. Recovery also reconciles terminal events written by an
+ * older worker version before looking for non-terminal settlements.
  */
 @Repository
 public class PostgresBotStopSettlementStore implements BotStopSettlementStore {
@@ -91,9 +93,12 @@ public class PostgresBotStopSettlementStore implements BotStopSettlementStore {
 
     @Override
     public List<BotStopSettlement> loadRecoverable() {
-        return jdbc.sql(RECOVERABLE)
-                .query((rs, row) -> BotStopSettlementView.of(rs).toDomain())
-                .list();
+        return transactions.execute(status -> {
+            jdbc.sql(RECONCILE_COMPLETED_PROJECTIONS).update();
+            return jdbc.sql(RECOVERABLE)
+                    .query((rs, row) -> BotStopSettlementView.of(rs).toDomain())
+                    .list();
+        });
     }
 
     @Override
@@ -162,7 +167,17 @@ public class PostgresBotStopSettlementStore implements BotStopSettlementStore {
                     .orElseThrow(() -> new IllegalStateException("stop step conflict", conflict));
         }
         recordCloseActions(event, next, result);
+        if (next.checkpoint() == StopCheckpoint.STOPPED) {
+            projectStopped(next.botId(), next.updatedAt());
+        }
         return next;
+    }
+
+    private void projectStopped(UUID botId, Instant stoppedAt) {
+        jdbc.sql(PROJECT_STOPPED)
+                .param("bot", botId)
+                .param("stoppedAt", offset(stoppedAt))
+                .update();
     }
 
     private BotEventAppend transition(
@@ -282,6 +297,30 @@ public class PostgresBotStopSettlementStore implements BotStopSettlementStore {
             StopSettlementDocument.PROJECTION,
             StopSettlementDocument.EVENT_TYPES,
             StopSettlementDocument.TERMINAL_CHECKPOINTS);
+
+    private static final String PROJECT_STOPPED = """
+            update bot.bots
+            set lifecycle_status = 'STOPPED',
+                lifecycle_changed_at = :stoppedAt,
+                stopped_at = coalesce(stopped_at, :stoppedAt),
+                updated_at = greatest(updated_at, :stoppedAt)
+            where id = :bot and lifecycle_status = 'STOPPING'
+            """;
+
+    private static final String RECONCILE_COMPLETED_PROJECTIONS = """
+            update bot.bots target
+            set lifecycle_status = 'STOPPED',
+                lifecycle_changed_at = completed.occurred_at,
+                stopped_at = coalesce(target.stopped_at, completed.occurred_at),
+                updated_at = greatest(target.updated_at, completed.occurred_at)
+            from (
+                select distinct on (bot_id) bot_id, occurred_at
+                from bot.bot_events
+                where event_type = 'SETTLEMENT_COMPLETED'
+                order by bot_id, event_sequence desc
+            ) completed
+            where target.id = completed.bot_id and target.lifecycle_status = 'STOPPING'
+            """;
 
     private static final String INSERT_CLOSE_ACTION = """
             insert into trading.system_close_actions (

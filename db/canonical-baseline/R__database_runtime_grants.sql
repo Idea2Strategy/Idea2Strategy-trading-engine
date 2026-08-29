@@ -639,6 +639,8 @@ GRANT USAGE ON SCHEMA "trading" TO idea2strategy_batch;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "bot"."bot_events" TO idea2strategy_trading;
 GRANT SELECT ON TABLE "bot"."bot_partitions" TO idea2strategy_trading;
 GRANT SELECT ON TABLE "bot"."bots" TO idea2strategy_trading;
+GRANT UPDATE (lifecycle_status, lifecycle_changed_at, stopped_at, updated_at)
+ON TABLE "bot"."bots" TO idea2strategy_trading;
 GRANT SELECT ON TABLE "bot"."continuation_deadlines" TO idea2strategy_trading;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "bot"."evaluation_runs" TO idea2strategy_trading;
 GRANT SELECT ON TABLE "bot"."flow_feature_requirements" TO idea2strategy_trading;

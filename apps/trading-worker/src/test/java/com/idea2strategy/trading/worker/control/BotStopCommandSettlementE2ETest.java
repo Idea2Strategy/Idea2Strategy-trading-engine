@@ -81,7 +81,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         "trading.fake-candidate.enabled=true",
         "spring.flyway.enabled=true",
         "spring.flyway.table=flyway_schema_history_private",
-        "spring.flyway.baseline-on-migrate=true"
+        "spring.flyway.baseline-on-migrate=true",
+        "trading.bot-control.transport.enabled=true"
 })
 class BotStopCommandSettlementE2ETest {
 
