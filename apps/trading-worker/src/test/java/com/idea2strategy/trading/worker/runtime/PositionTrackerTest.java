@@ -2,6 +2,8 @@ package com.idea2strategy.trading.worker.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.idea2strategy.trading.worker.runtime.EvaluatingBotRuntime.PositionSnapshot;
 import com.idea2strategy.trading.worker.runtime.EvaluatingBotRuntime.PositionTracker;
@@ -48,10 +50,27 @@ class PositionTrackerTest {
 
         assertAll(
                 () -> assertEquals("100", values.get("position.averageEntryPrice")),
+                () -> assertEquals(OPENED_AT.toString(), values.get("position.openedAt")),
                 () -> assertEquals("10.00000000", values.get("position.returnPercent")),
                 () -> assertEquals("10.00000000", values.get("position.peakReturnPercent")),
                 () -> assertEquals("0.00000000", values.get("position.drawdownPercent")),
                 () -> assertEquals("0", values.get("position.holdingTradingDays")));
+    }
+
+    /**
+     * Adding to an open position changes its average entry price, but it does not begin a new
+     * position cycle. Execution gates such as {@code 1회만} must therefore remain closed until the
+     * position is fully exited and a later snapshot has a different {@code openedAt}.
+     */
+    @Test
+    void identifiesAPositionCycleByItsOpeningInstantRatherThanItsAveragePrice() {
+        PositionSnapshot original = new PositionSnapshot(new BigDecimal("100"), OPENED_AT);
+
+        assertAll(
+                () -> assertTrue(original.samePositionCycle(
+                        new PositionSnapshot(new BigDecimal("104.25"), OPENED_AT))),
+                () -> assertFalse(original.samePositionCycle(new PositionSnapshot(
+                        new BigDecimal("104.25"), OPENED_AT.plusSeconds(1)))));
     }
 
     /**
@@ -64,7 +83,7 @@ class PositionTrackerTest {
     @Test
     void countsTradingDaysAsElapsedRatherThanInclusive() {
         PositionTracker tracker = new PositionTracker(
-                new PositionSnapshot(new BigDecimal("100"), OPENED_AT));
+                new PositionSnapshot(new BigDecimal("100"), OPENED_AT), tradingSessions());
         Map<String, String> values = new LinkedHashMap<>();
 
         tracker.publish(
@@ -81,7 +100,7 @@ class PositionTrackerTest {
     @Test
     void remembersThePeakAcrossBars() {
         PositionTracker tracker = new PositionTracker(
-                new PositionSnapshot(new BigDecimal("100"), OPENED_AT));
+                new PositionSnapshot(new BigDecimal("100"), OPENED_AT), tradingSessions());
         publish(tracker, new BigDecimal("120"));
 
         Map<String, String> values = publish(tracker, new BigDecimal("110"));
@@ -92,11 +111,32 @@ class PositionTrackerTest {
                 () -> assertEquals("8.33333333", values.get("position.drawdownPercent")));
     }
 
+    @Test
+    void scaleInUpdatesTheAverageWithoutResettingThePositionCyclePeak() {
+        PositionTracker tracker = new PositionTracker(
+                new PositionSnapshot(new BigDecimal("100"), OPENED_AT), tradingSessions());
+        publish(tracker, new BigDecimal("120"));
+        Map<String, String> values = new LinkedHashMap<>();
+
+        tracker.publish(
+                values,
+                new PositionSnapshot(new BigDecimal("110"), OPENED_AT),
+                new BigDecimal("110"),
+                OCCURRED_AT.plusSeconds(60),
+                Map.of("bar.closed.30m", "true"));
+
+        assertAll(
+                () -> assertEquals("110", values.get("position.averageEntryPrice")),
+                () -> assertEquals("0.00000000", values.get("position.returnPercent")),
+                () -> assertEquals("9.09090909", values.get("position.peakReturnPercent")),
+                () -> assertEquals("8.33333333", values.get("position.drawdownPercent")));
+    }
+
     /** The counter starts with the position, so its first closed bar is bar one. */
     @Test
     void countsTheEntryBarAsTheFirstHeldBar() {
         PositionTracker tracker = new PositionTracker(
-                new PositionSnapshot(new BigDecimal("100"), OPENED_AT));
+                new PositionSnapshot(new BigDecimal("100"), OPENED_AT), tradingSessions());
 
         Map<String, String> values = publish(tracker, new BigDecimal("100"));
 
@@ -106,7 +146,7 @@ class PositionTrackerTest {
     @Test
     void countsOnlyTheResolutionsWhoseBarClosed() {
         PositionTracker tracker = new PositionTracker(
-                new PositionSnapshot(new BigDecimal("100"), OPENED_AT));
+                new PositionSnapshot(new BigDecimal("100"), OPENED_AT), tradingSessions());
 
         Map<String, String> values = publish(tracker, new BigDecimal("100"));
 
@@ -119,17 +159,31 @@ class PositionTrackerTest {
 
     private static Map<String, String> publish(BigDecimal entryPrice, BigDecimal price) {
         return publish(
-                new PositionTracker(new PositionSnapshot(entryPrice, OPENED_AT)), price);
+                new PositionTracker(
+                        new PositionSnapshot(entryPrice, OPENED_AT), tradingSessions()),
+                entryPrice,
+                price);
     }
 
     private static Map<String, String> publish(PositionTracker tracker, BigDecimal price) {
+        return publish(tracker, new BigDecimal("100"), price);
+    }
+
+    private static Map<String, String> publish(
+            PositionTracker tracker, BigDecimal averageEntryPrice, BigDecimal price) {
         Map<String, String> values = new LinkedHashMap<>();
         tracker.publish(
                 values,
-                new PositionSnapshot(price, OPENED_AT),
+                new PositionSnapshot(averageEntryPrice, OPENED_AT),
                 price,
                 OCCURRED_AT,
                 Map.of("bar.closed.30m", "true"));
         return values;
+    }
+
+    private static EvaluatingBotRuntime.TradingSessionCounter tradingSessions() {
+        return (start, end) -> java.time.temporal.ChronoUnit.DAYS.between(
+                start.atZone(java.time.ZoneId.of("America/New_York")).toLocalDate(),
+                end.atZone(java.time.ZoneId.of("America/New_York")).toLocalDate());
     }
 }

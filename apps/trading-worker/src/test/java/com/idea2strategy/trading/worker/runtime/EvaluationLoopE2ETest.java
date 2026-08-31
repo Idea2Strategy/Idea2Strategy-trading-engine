@@ -102,6 +102,9 @@ class EvaluationLoopE2ETest {
     @Autowired
     private EvaluatingBotRuntime.EvaluationRunRecorder runRecorder;
 
+    @Autowired
+    private PostgresTradingSessionCounter tradingSessionCounter;
+
     /**
      * Each case starts from an unregistered bot and an empty canonical record.
      *
@@ -372,7 +375,29 @@ class EvaluationLoopE2ETest {
     }
 
     private EvaluatingBotRuntime freshRuntime() {
-        return new EvaluatingBotRuntime(processor, adapter, scopeResolver, runRecorder);
+        return new EvaluatingBotRuntime(
+                processor,
+                adapter,
+                scopeResolver,
+                runRecorder,
+                EvaluatingBotRuntime.PositionMetricSource.none(),
+                EvaluatingBotRuntime.ExecutionGateStateSource.none(),
+                new PostgresTradingSessionCounter(
+                        jdbc, "XNYS", "exchange-calendars/XNYS"));
+    }
+
+    @Test
+    void officialSessionCounterExcludesChristmasFromElapsedTradingDays() {
+        assertEquals(
+                1,
+                tradingSessionCounter.elapsed(
+                        Instant.parse("2025-12-24T21:00:00Z"),
+                        Instant.parse("2025-12-26T21:00:00Z")));
+        assertEquals(
+                2,
+                tradingSessionCounter.elapsed(
+                        Instant.parse("2025-12-24T21:00:00Z"),
+                        Instant.parse("2025-12-29T21:00:00Z")));
     }
 
     /**
@@ -520,6 +545,20 @@ class EvaluationLoopE2ETest {
                         currency_code)
                     values ('%s', 'STOCK', 'XNAS', 'USD')
                     """.formatted(INSTRUMENT));
+            statement.addBatch("""
+                    insert into market_data.trading_sessions (
+                        id, exchange_mic, session_date, opens_at, closes_at,
+                        session_type, calendar_version)
+                    values
+                        (gen_random_uuid(), 'XNYS', '2025-12-24', '2025-12-24T14:30:00+00',
+                         '2025-12-24T18:00:00+00', 'EARLY_CLOSE', 'exchange-calendars/XNYS'),
+                        (gen_random_uuid(), 'XNYS', '2025-12-26', '2025-12-26T14:30:00+00',
+                         '2025-12-26T21:00:00+00', 'REGULAR', 'exchange-calendars/XNYS'),
+                        (gen_random_uuid(), 'XNYS', '2025-12-29', '2025-12-29T14:30:00+00',
+                         '2025-12-29T21:00:00+00', 'REGULAR', 'exchange-calendars/XNYS'),
+                        (gen_random_uuid(), 'XNYS', '2026-08-04', '2026-08-04T13:30:00+00',
+                         '2026-08-04T20:00:00+00', 'REGULAR', 'exchange-calendars/XNYS')
+                    """);
             statement.addBatch("""
                     insert into trading.bot_budget_projections (bot_id, currency_code,
                         available_cash_amount, active_reservation_amount, invested_amount,
