@@ -6,6 +6,7 @@ import com.idea2strategy.trading.strategy.runtime.control.BotRuntimeLifecycle;
 import com.idea2strategy.trading.worker.candidate.OrderCandidateBatchAdapter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
@@ -40,15 +41,25 @@ public class EvaluationRuntimeConfiguration {
     }
 
     @Bean
+    PostgresTradingSessionCounter tradingSessionCounter(
+            JdbcClient jdbc,
+            @Value("${idea2strategy.market-data.exchange-mic:XNYS}") String exchangeMic,
+            @Value("${idea2strategy.market-data.calendar-version:exchange-calendars/XNYS}")
+                    String calendarVersion) {
+        return new PostgresTradingSessionCounter(jdbc, exchangeMic, calendarVersion);
+    }
+
+    @Bean
     EvaluatingBotRuntime evaluatingBotRuntime(
             CandidateBatchProcessor processor,
             OrderCandidateBatchAdapter adapter,
             PostgresBotScopeResolver scopeResolver,
             PostgresEvaluationRunRecorder runRecorder,
             PostgresPositionMetricSource positionMetricSource,
-            PostgresExecutionGateStateSource executionGateStateSource) {
+            PostgresExecutionGateStateSource executionGateStateSource,
+            PostgresTradingSessionCounter tradingSessionCounter) {
         return new EvaluatingBotRuntime(
                 processor, adapter, scopeResolver, runRecorder,
-                positionMetricSource, executionGateStateSource);
+                positionMetricSource, executionGateStateSource, tradingSessionCounter);
     }
 }

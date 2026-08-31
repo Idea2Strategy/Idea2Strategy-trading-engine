@@ -34,9 +34,6 @@ import com.idea2strategy.trading.worker.candidate.OrderCandidateBatchAdapter;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -90,6 +87,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
     private final EvaluationRunRecorder runRecorder;
     private final PositionMetricSource positionMetricSource;
     private final ExecutionGateStateSource executionGateStateSource;
+    private final TradingSessionCounter tradingSessionCounter;
     private final BasicPlanInterpreter interpreter = new BasicPlanInterpreter();
     private final BasicStrategyExecutor executor = new BasicStrategyExecutor();
     private final BasicCandidateConverger converger = new BasicCandidateConverger();
@@ -99,28 +97,10 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             CandidateBatchProcessor processor,
             OrderCandidateBatchAdapter adapter,
             BotScopeResolver scopeResolver,
-            EvaluationRunRecorder runRecorder) {
-        this(processor, adapter, scopeResolver, runRecorder,
-                PositionMetricSource.none(), ExecutionGateStateSource.none());
-    }
-
-    public EvaluatingBotRuntime(
-            CandidateBatchProcessor processor,
-            OrderCandidateBatchAdapter adapter,
-            BotScopeResolver scopeResolver,
-            EvaluationRunRecorder runRecorder,
-            PositionMetricSource positionMetricSource) {
-        this(processor, adapter, scopeResolver, runRecorder,
-                positionMetricSource, ExecutionGateStateSource.none());
-    }
-
-    public EvaluatingBotRuntime(
-            CandidateBatchProcessor processor,
-            OrderCandidateBatchAdapter adapter,
-            BotScopeResolver scopeResolver,
             EvaluationRunRecorder runRecorder,
             PositionMetricSource positionMetricSource,
-            ExecutionGateStateSource executionGateStateSource) {
+            ExecutionGateStateSource executionGateStateSource,
+            TradingSessionCounter tradingSessionCounter) {
         this.processor = Objects.requireNonNull(processor, "processor");
         this.adapter = Objects.requireNonNull(adapter, "adapter");
         this.scopeResolver = Objects.requireNonNull(scopeResolver, "scopeResolver");
@@ -128,6 +108,8 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         this.positionMetricSource = Objects.requireNonNull(positionMetricSource, "positionMetricSource");
         this.executionGateStateSource =
                 Objects.requireNonNull(executionGateStateSource, "executionGateStateSource");
+        this.tradingSessionCounter =
+                Objects.requireNonNull(tradingSessionCounter, "tradingSessionCounter");
     }
 
     @Override
@@ -146,7 +128,8 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         }
 
         bots.put(plan.botId(), new RegisteredBot(
-                plan.botId(), interpreted, instrumentStates, calculator, evaluationTimeframe, window));
+                plan.botId(), interpreted, instrumentStates, calculator, evaluationTimeframe, window,
+                tradingSessionCounter));
         log.info("bot {} registered for evaluation over {} instruments within {}",
                 plan.botId(), interpreted.subscribedInstruments().size(), window);
     }
@@ -482,6 +465,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         private final BoundedWindowFeatureCalculator calculator;
         private final Set<StrategyEvaluationTimeframe> evaluationTimeframes;
         private final EvaluationWindow window;
+        private final TradingSessionCounter tradingSessionCounter;
         private final Map<UUID, BasicMarketSignalState> signalStates = new LinkedHashMap<>();
         private final Map<UUID, PositionTracker> positionTrackers = new LinkedHashMap<>();
         private final Map<String, ExecutionGate> executionGates = new LinkedHashMap<>();
@@ -492,13 +476,15 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                 Map<UUID, InstrumentRuntimeState> instrumentStates,
                 BoundedWindowFeatureCalculator calculator,
                 Set<StrategyEvaluationTimeframe> evaluationTimeframes,
-                EvaluationWindow window) {
+                EvaluationWindow window,
+                TradingSessionCounter tradingSessionCounter) {
             this.botId = botId;
             this.plan = plan;
             this.instrumentStates = new LinkedHashMap<>(instrumentStates);
             this.calculator = calculator;
             this.evaluationTimeframes = Set.copyOf(evaluationTimeframes);
             this.window = window;
+            this.tradingSessionCounter = tradingSessionCounter;
         }
 
         private UUID botId() {
@@ -540,7 +526,7 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                 return current;
             }
             clearExecutionGates(instrumentId);
-            PositionTracker replacement = new PositionTracker(snapshot);
+            PositionTracker replacement = new PositionTracker(snapshot, tradingSessionCounter);
             positionTrackers.put(instrumentId, replacement);
             return replacement;
         }
@@ -554,7 +540,8 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         private ExecutionGate executionGate(
                 String flowId, UUID instrumentId, Supplier<ExecutionGateSnapshot> snapshot) {
             return executionGates.computeIfAbsent(
-                    flowId + ":" + instrumentId, ignored -> new ExecutionGate(snapshot.get()));
+                    flowId + ":" + instrumentId,
+                    ignored -> new ExecutionGate(snapshot.get(), tradingSessionCounter));
         }
 
         private void clearExecutionGates(UUID instrumentId) {
@@ -568,13 +555,17 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
         private int barsSinceExecution;
         private Instant lastExecutionAt;
         private boolean conditionRearmed = true;
+        private final TradingSessionCounter tradingSessionCounter;
 
-        ExecutionGate() {
-            this(ExecutionGateSnapshot.empty());
+        ExecutionGate(TradingSessionCounter tradingSessionCounter) {
+            this(ExecutionGateSnapshot.empty(), tradingSessionCounter);
         }
 
-        ExecutionGate(ExecutionGateSnapshot snapshot) {
+        ExecutionGate(
+                ExecutionGateSnapshot snapshot, TradingSessionCounter tradingSessionCounter) {
             Objects.requireNonNull(snapshot, "snapshot");
+            this.tradingSessionCounter =
+                    Objects.requireNonNull(tradingSessionCounter, "tradingSessionCounter");
             executions = snapshot.executions();
             lastExecutionAt = snapshot.lastExecutionAt();
             conditionRearmed = executions == 0;
@@ -604,7 +595,8 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                     || switch (policy.waitMode()) {
                         case "조건 재충족" -> conditionRearmed;
                         case "N봉 이후" -> barsSinceExecution >= policy.waitInterval();
-                        case "N거래일 이후" -> tradingDaysSince(lastExecutionAt, occurredAt)
+                        case "N거래일 이후" -> tradingSessionCounter.elapsed(
+                                        lastExecutionAt, occurredAt)
                                 >= policy.waitInterval();
                         default -> false;
                     };
@@ -618,18 +610,6 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
             return true;
         }
 
-        private static long tradingDaysSince(Instant start, Instant end) {
-            LocalDate cursor = start.atZone(ZoneId.of("America/New_York")).toLocalDate();
-            LocalDate through = end.atZone(ZoneId.of("America/New_York")).toLocalDate();
-            long days = 0;
-            while (cursor.isBefore(through)) {
-                cursor = cursor.plusDays(1);
-                if (cursor.getDayOfWeek().getValue() <= 5) {
-                    days++;
-                }
-            }
-            return days;
-        }
     }
 
     /** Mutable market and feature ordering for exactly one bot/instrument pair. */
@@ -664,21 +644,22 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
     }
 
     static final class PositionTracker {
-        private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
-        private final BigDecimal averageEntryPrice;
+        private BigDecimal averageEntryPrice;
         private final Instant openedAt;
+        private final TradingSessionCounter tradingSessionCounter;
         private BigDecimal peakPrice;
         private final Map<String, Long> closedBars = new LinkedHashMap<>();
 
-        PositionTracker(PositionSnapshot snapshot) {
+        PositionTracker(PositionSnapshot snapshot, TradingSessionCounter tradingSessionCounter) {
             this.averageEntryPrice = snapshot.averageEntryPrice();
             this.openedAt = snapshot.openedAt();
+            this.tradingSessionCounter =
+                    Objects.requireNonNull(tradingSessionCounter, "tradingSessionCounter");
             this.peakPrice = averageEntryPrice;
         }
 
         private boolean matches(PositionSnapshot snapshot) {
-            return averageEntryPrice.compareTo(snapshot.averageEntryPrice()) == 0
-                    && openedAt.equals(snapshot.openedAt());
+            return new PositionSnapshot(averageEntryPrice, openedAt).samePositionCycle(snapshot);
         }
 
         void publish(
@@ -687,11 +668,13 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                 BigDecimal price,
                 Instant occurredAt,
                 Map<String, String> marketValues) {
+            averageEntryPrice = snapshot.averageEntryPrice();
             peakPrice = peakPrice.max(price);
             BigDecimal currentReturn = percentage(price.subtract(averageEntryPrice), averageEntryPrice);
             BigDecimal peakReturn = percentage(peakPrice.subtract(averageEntryPrice), averageEntryPrice);
             BigDecimal drawdown = percentage(peakPrice.subtract(price), peakPrice);
             values.put("position.averageEntryPrice", averageEntryPrice.toPlainString());
+            values.put("position.openedAt", openedAt.toString());
             values.put("position.returnPercent", currentReturn.toPlainString());
             values.put("position.peakReturnPercent", peakReturn.toPlainString());
             values.put("position.drawdownPercent", drawdown.toPlainString());
@@ -702,10 +685,8 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                 values.put("position.holdingBars." + resolution,
                         Long.toString(closedBars.getOrDefault(resolution, 0L)));
             }
-            LocalDate opened = openedAt.atZone(MARKET_ZONE).toLocalDate();
-            LocalDate current = occurredAt.atZone(MARKET_ZONE).toLocalDate();
             values.put("position.holdingTradingDays",
-                    Long.toString(tradingWeekdaysBetween(opened, current)));
+                    Long.toString(tradingSessionCounter.elapsed(openedAt, occurredAt)));
         }
 
         /**
@@ -726,17 +707,6 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                     .divide(denominator, 8, java.math.RoundingMode.HALF_EVEN);
         }
 
-        private static long tradingWeekdaysBetween(LocalDate start, LocalDate end) {
-            long count = 0;
-            for (long day = 0; day <= Math.max(0, ChronoUnit.DAYS.between(start, end)); day++) {
-                java.time.DayOfWeek weekday = start.plusDays(day).getDayOfWeek();
-                if (weekday != java.time.DayOfWeek.SATURDAY
-                        && weekday != java.time.DayOfWeek.SUNDAY) {
-                    count++;
-                }
-            }
-            return Math.max(0, count - 1);
-        }
     }
 
     /** The canonical ids of one flow, which a candidate batch cannot be written without. */
@@ -810,5 +780,20 @@ public final class EvaluatingBotRuntime implements BotRuntimeLifecycle {
                 throw new IllegalArgumentException("averageEntryPrice must be positive");
             }
         }
+
+        /**
+         * A position cycle lasts from the first opening fill until the position is fully closed.
+         * Scale-in and partial-exit fills may change the average price without starting a new
+         * cycle, while a later re-entry has a new opening instant.
+         */
+        boolean samePositionCycle(PositionSnapshot other) {
+            return other != null && openedAt.equals(other.openedAt());
+        }
+    }
+
+    /** Counts elapsed sessions from the same official calendar used by market evaluation. */
+    @FunctionalInterface
+    public interface TradingSessionCounter {
+        long elapsed(Instant start, Instant end);
     }
 }

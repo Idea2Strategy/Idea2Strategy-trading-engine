@@ -44,9 +44,17 @@ final class PostgresPositionMetricSource implements EvaluatingBotRuntime.Positio
                         && position.costBasis() != null
                         && position.openedAt() != null)
                 .map(position -> new EvaluatingBotRuntime.PositionSnapshot(
-                        position.costBasis().divide(
-                                position.quantity(), 8, java.math.RoundingMode.HALF_UP),
+                        averageEntryPrice(position.costBasis(), position.quantity()),
                         position.openedAt().toInstant()));
+    }
+
+    static BigDecimal averageEntryPrice(BigDecimal costBasis, BigDecimal quantity) {
+        Objects.requireNonNull(costBasis, "costBasis");
+        Objects.requireNonNull(quantity, "quantity");
+        if (quantity.signum() <= 0) {
+            throw new IllegalArgumentException("quantity must be positive");
+        }
+        return costBasis.divide(quantity, 8, java.math.RoundingMode.HALF_EVEN);
     }
 
     private record RawPosition(
