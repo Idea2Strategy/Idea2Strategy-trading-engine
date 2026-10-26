@@ -64,9 +64,9 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-flyway")
     testImplementation("com.fasterxml.jackson.core:jackson-databind")
     testImplementation("org.flywaydb:flyway-database-postgresql")
-    testImplementation(platform("org.testcontainers:testcontainers-bom:1.21.4"))
-    testImplementation("org.testcontainers:junit-jupiter")
-    testImplementation("org.testcontainers:postgresql")
+    testImplementation(platform("org.testcontainers:testcontainers-bom:2.0.5"))
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter")
+    testImplementation("org.testcontainers:testcontainers-postgresql")
     testImplementation("org.testcontainers:testcontainers")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

@@ -48,9 +48,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * F92's initiation path against the real canonical schema: the market data owner's approved
@@ -67,8 +67,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class ApprovedCorporateActionPollerE2ETest {
 
     @Container
-    private static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:17-alpine");
+    private static final PostgreSQLContainer POSTGRES =
+            new PostgreSQLContainer("postgres:17-alpine");
 
     private static final UUID INSTRUMENT = UUID.fromString("f9200000-0000-4000-8000-000000000010");
     private static final UUID LONELY_INSTRUMENT =

@@ -32,16 +32,16 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /** Root #181's durable, atomic E-to-F account-opening acceptance path. */
 @Testcontainers(disabledWithoutDocker = true)
 class RoomEvaluationAccountOpenPollerE2ETest {
 
     @Container
-    private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
+    private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
     private static final UUID BOT = UUID.fromString("f1810000-0000-4000-8000-000000000101");
     private static final UUID ROOM = UUID.fromString("f1810000-0000-4000-8000-000000000102");

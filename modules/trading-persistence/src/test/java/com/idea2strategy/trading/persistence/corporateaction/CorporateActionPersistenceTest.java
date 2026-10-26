@@ -49,9 +49,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Proves the corporate-action write path against the real canonical schema.
@@ -69,8 +69,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class CorporateActionPersistenceTest {
 
     @Container
-    private static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:17-alpine");
+    private static final PostgreSQLContainer POSTGRES =
+            new PostgreSQLContainer("postgres:17-alpine");
 
     private static final UUID BOT = UUID.fromString("30000000-0000-4000-8000-000000000001");
     private static final UUID PARTITION = UUID.fromString("31000000-0000-4000-8000-000000000001");
