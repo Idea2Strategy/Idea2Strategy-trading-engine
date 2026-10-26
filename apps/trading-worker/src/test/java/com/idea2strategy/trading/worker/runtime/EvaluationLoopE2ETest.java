@@ -30,9 +30,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * RT2 end to end: a started bot, a market event, and a canonical order.
@@ -71,7 +71,7 @@ class EvaluationLoopE2ETest {
     private static final Instant EVENT_AT = Instant.parse("2026-08-04T14:30:00Z");
 
     @Container
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {

@@ -10,9 +10,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The pinned canonical baseline is the only way this repository can test the canonical schema it
@@ -22,7 +22,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class CanonicalBaselineContractTest {
 
     @Container
-    private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
+    private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
     private static final List<String> APPLICATION_SCHEMAS = List.of(
             "identity", "strategy", "bot", "storage", "market_data",

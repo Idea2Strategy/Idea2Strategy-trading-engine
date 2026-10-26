@@ -53,9 +53,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * F90: C's evaluation output is processed exactly once, whatever the queue does to it.
@@ -89,8 +89,8 @@ class CandidateHandoffExactlyOnceE2ETest {
     private static final UUID FIXTURE_INSTRUMENT = UUID.fromString("8a35e6b5-cf84-4f63-920d-57c1f1b95df0");
 
     @Container
-    private static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:17-alpine");
+    private static final PostgreSQLContainer POSTGRES =
+            new PostgreSQLContainer("postgres:17-alpine");
 
     @DynamicPropertySource
     static void databaseProperties(DynamicPropertyRegistry registry) {

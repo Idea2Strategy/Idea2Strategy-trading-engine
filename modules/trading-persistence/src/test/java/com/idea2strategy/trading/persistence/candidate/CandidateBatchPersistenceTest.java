@@ -21,17 +21,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 @Testcontainers(disabledWithoutDocker = true)
 class CandidateBatchPersistenceTest {
     private static final UUID BATCH_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
 
     @Container
-    private static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:17-alpine");
+    private static final PostgreSQLContainer POSTGRES =
+            new PostgreSQLContainer("postgres:17-alpine");
 
     private static DriverManagerDataSource dataSource;
     private static PostgresCandidateBatchClaimAdapter claimAdapter;

@@ -34,9 +34,9 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * Proves the double entry write path against the real canonical schema.
@@ -49,7 +49,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class LedgerPersistenceTest {
 
     @Container
-    private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
+    private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
     private static final UUID BOT = UUID.fromString("b3000000-0000-4000-8000-000000000001");
     private static final UUID OTHER_BOT = UUID.fromString("b3000000-0000-4000-8000-000000000002");

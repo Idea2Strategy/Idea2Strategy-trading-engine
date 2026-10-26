@@ -39,9 +39,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * B91: B's start and stop commands reach real evaluation and real settlement, and stay consistent
@@ -107,7 +107,7 @@ class BotControlIntegrationE2ETest {
     private static final Instant POLL_AT = Instant.parse("2026-08-02T13:29:30Z");
 
     @Container
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {

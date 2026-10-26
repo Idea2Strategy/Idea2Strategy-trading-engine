@@ -58,9 +58,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * F91: B's stop command reaches the real order and settlement state.
@@ -119,8 +119,8 @@ class BotStopCommandSettlementE2ETest {
             FEE_POLICY, "broker-rules:v1", PRECISION, "order-intent-composition:v1");
 
     @Container
-    private static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:17-alpine");
+    private static final PostgreSQLContainer POSTGRES =
+            new PostgreSQLContainer("postgres:17-alpine");
 
     @DynamicPropertySource
     static void databaseProperties(DynamicPropertyRegistry registry) {
