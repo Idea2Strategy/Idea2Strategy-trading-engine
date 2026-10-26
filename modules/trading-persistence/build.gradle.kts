@@ -5,7 +5,7 @@ plugins {
 
 dependencies {
     api(project(":modules:trading-application"))
-    implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.2"))
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework:spring-jdbc")
     implementation("org.jooq:jooq")
@@ -14,7 +14,7 @@ dependencies {
     // The pinned canonical baseline is a test input only, shared with apps/trading-worker.
     // Flyway must never reach the runtime classpath; apps/trading-worker's
     // verifyRuntimeDatabaseBoundary task enforces that.
-    testFixturesImplementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
+    testFixturesImplementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.2"))
     testFixturesApi("org.flywaydb:flyway-core")
     testFixturesRuntimeOnly("org.flywaydb:flyway-database-postgresql")
 

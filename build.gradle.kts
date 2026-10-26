@@ -1,6 +1,6 @@
 plugins {
     base
-    id("org.springframework.boot") version "4.1.0" apply false
+    id("org.springframework.boot") version "4.1.2" apply false
 }
 
 allprojects {
