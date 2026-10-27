@@ -58,9 +58,19 @@ class CanonicalBaselineContractTest {
     }
 
     @Test
-    void theBaselineContainsOnlyTheRebasedV1AndRuntimeGrants() {
+    void theBaselineContainsTheRebasedV1TheApprovedLaterMigrationsAndRuntimeGrants() {
         assertEquals(
-                List.of("R__database_runtime_grants.sql", "V1__initial_schema.sql"),
+                List.of(
+                        "R__database_runtime_grants.sql",
+                        "V1__initial_schema.sql",
+                        "V20260825000000__backend_basic_strategy_execution_completion.sql",
+                        "V20260825000001__pipeline_basic_strategy_feature_catalog.sql",
+                        "V20260826010000__backend_bind_room_invitations_to_accounts.sql",
+                        "V20260827090000__backtest_add_owner_soft_delete.sql",
+                        "V20260902000000__pipeline_backtest_object_cleanup_capability.sql",
+                        "V20260902000001__pipeline_bind_backtest_cleanup_ownership.sql",
+                        "V20260902000002__backtest_narrow_runtime_attempt_writes.sql",
+                        "V20260902000003__pipeline_narrow_backtest_object_writes.sql"),
                 CanonicalBaseline.presentMigrations());
     }
 
@@ -73,7 +83,7 @@ class CanonicalBaselineContractTest {
                 .param(APPLICATION_SCHEMAS.toArray(String[]::new))
                 .query(Integer.class)
                 .single();
-        assertEquals(181, tables, "the pinned canonical baseline no longer produces the canonical schema");
+        assertEquals(185, tables, "the pinned canonical baseline no longer produces the canonical schema");
     }
 
     @Test

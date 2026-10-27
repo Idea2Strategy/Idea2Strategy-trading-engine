@@ -11,6 +11,7 @@ import com.idea2strategy.trading.domain.event.BotEventAppend;
 import com.idea2strategy.trading.persistence.canonical.CanonicalBaseline;
 import com.idea2strategy.trading.persistence.event.PostgresBotEventStore;
 import com.idea2strategy.trading.persistence.ledger.PostgresLedgerStore;
+import com.idea2strategy.trading.worker.TradingRuntimeRole;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.Statement;
@@ -55,6 +56,8 @@ class RoomEvaluationAccountOpenPollerE2ETest {
     private static DriverManagerDataSource dataSource;
     private static JdbcTransactionManager transactions;
     private static JdbcClient jdbc;
+    private static JdbcTransactionManager runtimeTransactions;
+    private static JdbcClient runtimeJdbc;
 
     @BeforeAll
     static void database() throws Exception {
@@ -62,6 +65,10 @@ class RoomEvaluationAccountOpenPollerE2ETest {
         CanonicalBaseline.migrateWithContributions(dataSource);
         transactions = new JdbcTransactionManager(dataSource);
         jdbc = JdbcClient.create(dataSource);
+        DriverManagerDataSource runtime = TradingRuntimeRole.dataSource(
+                POSTGRES.getJdbcUrl(), dataSource);
+        runtimeTransactions = new JdbcTransactionManager(runtime);
+        runtimeJdbc = JdbcClient.create(runtime);
         // Backend's preceding root #181 envelope migration; remove this compatibility step when
         // the next pinned canonical baseline includes V20260804145900.
         jdbc.sql("alter table operations.outbox_messages alter column event_schema_version type varchar(80)").update();
@@ -93,7 +100,7 @@ class RoomEvaluationAccountOpenPollerE2ETest {
     @Test
     void opensExactlyOneBalancedLedgerAndPublishesOneCompletionAcrossRedelivery() {
         seedRequest(message(1), "room-open:" + PARTICIPATION, "100000.00000000");
-        RoomEvaluationAccountOpenPoller poller = poller(new PostgresLedgerStore(jdbc, transactions));
+        RoomEvaluationAccountOpenPoller poller = poller(new PostgresLedgerStore(runtimeJdbc, runtimeTransactions));
 
         assertEquals(1, poller.pollOnce(10));
         assertEquals(0, poller.pollOnce(10));
@@ -111,7 +118,7 @@ class RoomEvaluationAccountOpenPollerE2ETest {
     void producerKeyReusedWithDifferentContentIsPermanentAndAuditedWithoutAnotherLedger() {
         String producerKey = "room-open:" + PARTICIPATION;
         seedRequest(message(1), producerKey, "100000.00000000");
-        RoomEvaluationAccountOpenPoller poller = poller(new PostgresLedgerStore(jdbc, transactions));
+        RoomEvaluationAccountOpenPoller poller = poller(new PostgresLedgerStore(runtimeJdbc, runtimeTransactions));
         assertEquals(1, poller.pollOnce(10));
 
         seedRequest(message(2), producerKey, "99999.00000000");
@@ -145,7 +152,7 @@ class RoomEvaluationAccountOpenPollerE2ETest {
         MutableClock time = new MutableClock(NOW);
         CountDownLatch effectEntered = new CountDownLatch(1);
         CountDownLatch releaseEffect = new CountDownLatch(1);
-        BotEventStore delegate = new PostgresBotEventStore(jdbc, transactions);
+        BotEventStore delegate = new PostgresBotEventStore(runtimeJdbc, runtimeTransactions);
         BotEventStore blocking = new BotEventStore() {
             @Override public BotEvent appendOrLoad(BotEventAppend append) {
                 effectEntered.countDown();
@@ -161,8 +168,8 @@ class RoomEvaluationAccountOpenPollerE2ETest {
                 return delegate.find(botId, eventId);
             }
         };
-        var first = poller(blocking, new PostgresLedgerStore(jdbc, transactions), time, "worker-1", Duration.ofSeconds(1));
-        var second = poller(delegate, new PostgresLedgerStore(jdbc, transactions), time, "worker-2", Duration.ofSeconds(1));
+        var first = poller(blocking, new PostgresLedgerStore(runtimeJdbc, runtimeTransactions), time, "worker-1", Duration.ofSeconds(1));
+        var second = poller(delegate, new PostgresLedgerStore(runtimeJdbc, runtimeTransactions), time, "worker-2", Duration.ofSeconds(1));
 
         try (var executor = Executors.newFixedThreadPool(2)) {
             var firstResult = executor.submit(() -> first.pollOnce(1));
@@ -186,15 +193,15 @@ class RoomEvaluationAccountOpenPollerE2ETest {
     }
 
     private RoomEvaluationAccountOpenPoller poller(LedgerStore ledger) {
-        return poller(new PostgresBotEventStore(jdbc, transactions), ledger,
+        return poller(new PostgresBotEventStore(runtimeJdbc, runtimeTransactions), ledger,
                 Clock.fixed(NOW, ZoneOffset.UTC), "root-181-test", Duration.ofSeconds(30));
     }
 
     private RoomEvaluationAccountOpenPoller poller(
             BotEventStore events, LedgerStore ledger, Clock clock, String worker, Duration lease) {
         return new RoomEvaluationAccountOpenPoller(
-                jdbc, events, ledger, new ObjectMapper(), clock, worker, lease,
-                Duration.ofSeconds(30), 3, transactions);
+                runtimeJdbc, events, ledger, new ObjectMapper(), clock, worker, lease,
+                Duration.ofSeconds(30), 3, runtimeTransactions);
     }
 
     private void seedRequest(UUID messageId, String producerKey, String initialCash) {

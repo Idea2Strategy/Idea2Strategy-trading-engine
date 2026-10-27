@@ -30,6 +30,7 @@ import com.idea2strategy.trading.persistence.event.PostgresBotEventStore;
 import com.idea2strategy.trading.persistence.fill.PostgresFillRecordStore;
 import com.idea2strategy.trading.persistence.order.PostgresOrderLifecycleStore;
 import com.idea2strategy.trading.persistence.position.PostgresPositionLotStore;
+import com.idea2strategy.trading.worker.TradingRuntimeRole;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.Statement;
@@ -113,6 +114,8 @@ class ApprovedCorporateActionPollerE2ETest {
     private static DriverManagerDataSource dataSource;
     private static JdbcClient jdbc;
     private static JdbcTransactionManager transactions;
+    private static JdbcClient runtimeJdbc;
+    private static JdbcTransactionManager runtimeTransactions;
     private static ApprovedCorporateActionPoller poller;
     private static BotContext firstBot;
     private static BotContext secondBot;
@@ -124,10 +127,14 @@ class ApprovedCorporateActionPollerE2ETest {
         CanonicalBaseline.migrateWithContributions(dataSource);
         jdbc = JdbcClient.create(dataSource);
         transactions = new JdbcTransactionManager(dataSource);
+        DriverManagerDataSource runtime = TradingRuntimeRole.dataSource(
+                POSTGRES.getJdbcUrl(), dataSource);
+        runtimeJdbc = JdbcClient.create(runtime);
+        runtimeTransactions = new JdbcTransactionManager(runtime);
         poller = new ApprovedCorporateActionPoller(
-                jdbc, new PostgresBotEventStore(jdbc, transactions),
-                new CorporateActionService(new PostgresCorporateActionStore(jdbc, transactions)),
-                new ObjectMapper(), Clock.fixed(NOW, ZoneOffset.UTC), transactions);
+                runtimeJdbc, new PostgresBotEventStore(runtimeJdbc, runtimeTransactions),
+                new CorporateActionService(new PostgresCorporateActionStore(runtimeJdbc, runtimeTransactions)),
+                new ObjectMapper(), Clock.fixed(NOW, ZoneOffset.UTC), runtimeTransactions);
 
         firstBot = new BotContext(1);
         secondBot = new BotContext(2);
@@ -281,7 +288,7 @@ class ApprovedCorporateActionPollerE2ETest {
                 EFFECTIVE_AT.plusSeconds(1), 2, 1, null,
                 approvedReview(RETRIED_SPLIT, termsHash(RETRIED_SPLIT)));
 
-        CorporateActionStore canonical = new PostgresCorporateActionStore(jdbc, transactions);
+        CorporateActionStore canonical = new PostgresCorporateActionStore(runtimeJdbc, runtimeTransactions);
         AtomicInteger attempts = new AtomicInteger();
         CorporateActionStore failsOnce = application -> {
             if (application.action().actionId().equals(RETRIED_SPLIT)
@@ -330,8 +337,8 @@ class ApprovedCorporateActionPollerE2ETest {
 
     private static ApprovedCorporateActionPoller poller(CorporateActionService service) {
         return new ApprovedCorporateActionPoller(
-                jdbc, new PostgresBotEventStore(jdbc, transactions), service,
-                new ObjectMapper(), Clock.fixed(NOW, ZoneOffset.UTC), transactions);
+                runtimeJdbc, new PostgresBotEventStore(runtimeJdbc, runtimeTransactions), service,
+                new ObjectMapper(), Clock.fixed(NOW, ZoneOffset.UTC), runtimeTransactions);
     }
 
     private static void insertAction(UUID id, UUID instrumentId, UUID manifestId,
