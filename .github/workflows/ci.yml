@@ -32,7 +32,7 @@ jobs:
       - name: Run Gradle verification
         run: |
           chmod +x gradlew
-          ./gradlew check --no-daemon --build-cache --parallel
+          ./gradlew check --no-daemon --build-cache --parallel -PrequireContainerTests=true
 
   runtime-containers:
     runs-on: ubuntu-latest

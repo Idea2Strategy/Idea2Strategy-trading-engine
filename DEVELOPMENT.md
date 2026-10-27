@@ -26,6 +26,15 @@ Market provider
 - Command 기본은 JPA, 복합 조회는 jOOQ
 - DBML·Flyway는 루트 저장소가 통합 관리합니다.
 
+## 테스트와 Docker
+
+- PostgreSQL·Redis가 필요한 테스트는 Testcontainers로 실행합니다. 로컬에서 Docker가 없으면
+  `disabledWithoutDocker = true`에 따라 건너뛰고 `./gradlew check`는 통과합니다.
+- Docker 사용 가능 여부는 모든 `Test` 작업의 입력입니다. Docker 없이 실행한 결과는 빌드 캐시에
+  저장하지 않고, Docker를 켠 뒤의 실행에서 UP-TO-DATE로 재사용하지도 않습니다.
+- CI는 `./gradlew check -PrequireContainerTests=true`로 실행합니다. 이때 테스트를 하나라도
+  건너뛴 `Test` 작업은 실패합니다. 로컬에서 같은 옵션으로 CI 조건을 재현할 수 있습니다.
+
 ## Git Flow
 
 - 기본 브랜치: `develop`
