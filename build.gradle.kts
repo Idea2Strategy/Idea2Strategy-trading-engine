@@ -12,6 +12,62 @@ allprojects {
     }
 }
 
+/**
+ * Whether a Docker engine accepts connections on an endpoint Testcontainers would try.
+ *
+ * Container test classes use `disabledWithoutDocker = true`, so a run without Docker passes with
+ * them skipped. Such a skip-only result is never stored in the build cache, and as a test input
+ * this keeps a later run that has Docker from treating it as up-to-date.
+ */
+abstract class DockerAvailability : ValueSource<Boolean, ValueSourceParameters.None> {
+    override fun obtain(): Boolean = candidateEndpoints().any(::accepts)
+
+    private fun candidateEndpoints(): List<String> {
+        val home = System.getProperty("user.home")
+        val userProperties = java.util.Properties()
+        val userPropertiesFile = java.io.File(home, ".testcontainers.properties")
+        if (userPropertiesFile.isFile) {
+            userPropertiesFile.inputStream().use(userProperties::load)
+        }
+        return listOfNotNull(
+            System.getenv("DOCKER_HOST") ?: userProperties.getProperty("docker.host"),
+            userProperties.getProperty("tc.host"),
+            "unix:///var/run/docker.sock",
+            "unix://$home/.docker/run/docker.sock",
+            "unix://$home/.docker/desktop/docker.sock",
+            System.getenv("XDG_RUNTIME_DIR")?.let { "unix://$it/docker.sock" },
+            "npipe:////./pipe/docker_engine",
+        ).filter(String::isNotBlank)
+    }
+
+    private fun accepts(endpoint: String): Boolean = try {
+        val uri = java.net.URI(endpoint)
+        when (uri.scheme) {
+            "unix" -> java.nio.channels.SocketChannel.open(java.net.StandardProtocolFamily.UNIX).use {
+                it.connect(java.net.UnixDomainSocketAddress.of(uri.path))
+            }
+            "tcp", "http", "https" -> java.net.Socket().use {
+                it.connect(java.net.InetSocketAddress(uri.host, uri.port.takeIf { port -> port > 0 } ?: 2375), 1_000)
+                true
+            }
+            "npipe" -> java.io.File(endpoint.removePrefix("npipe://").replace('/', '\\')).exists()
+            else -> false
+        }
+    } catch (unreachable: Exception) {
+        false
+    }
+}
+
+val dockerAvailable = providers.of(DockerAvailability::class.java) {}
+
+/**
+ * CI passes `-PrequireContainerTests=true`: a test task that skipped any test then fails, so a run
+ * without Docker cannot pass with its container tests skipped. Local runs leave it unset.
+ */
+val requireContainerTests = providers.gradleProperty("requireContainerTests")
+    .map(String::toBoolean)
+    .getOrElse(false)
+
 subprojects {
     plugins.withId("java") {
         extensions.configure<JavaPluginExtension> {
@@ -22,6 +78,31 @@ subprojects {
 
         tasks.withType<Test>().configureEach {
             useJUnitPlatform()
+            val docker = dockerAvailable
+            inputs.property("dockerAvailable", docker)
+            outputs.cacheIf("Docker is available, so container tests ran") { docker.get() }
+            if (requireContainerTests) {
+                val junitXml = reports.junitXml.outputLocation
+                doLast("rejectSkippedTests") {
+                    val skipped = junitXml.get().asFile
+                        .listFiles { file -> file.name.startsWith("TEST-") && file.name.endsWith(".xml") }
+                        .orEmpty()
+                        .map { report ->
+                            javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+                                .parse(report).documentElement
+                        }
+                        .filter { suite -> (suite.getAttribute("skipped").toIntOrNull() ?: 0) > 0 }
+                        .map { suite -> "${suite.getAttribute("name")} (${suite.getAttribute("skipped")})" }
+                        .sorted()
+                    if (skipped.isNotEmpty()) {
+                        throw GradleException(
+                            "$path skipped tests with -PrequireContainerTests=true. Container tests " +
+                                "need a Docker engine that Testcontainers can reach. Skipped: " +
+                                skipped.joinToString(", "),
+                        )
+                    }
+                }
+            }
         }
     }
 }
