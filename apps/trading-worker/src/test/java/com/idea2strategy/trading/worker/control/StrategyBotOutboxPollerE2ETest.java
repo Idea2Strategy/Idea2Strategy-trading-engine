@@ -11,6 +11,7 @@ import com.idea2strategy.trading.strategy.runtime.control.StrategyBotControlCons
 import com.idea2strategy.trading.strategy.runtime.control.StrategyBotExecutionPlanAdapter;
 import com.idea2strategy.trading.strategy.runtime.plan.ExecutionPlanCompatibility;
 import com.idea2strategy.trading.strategy.runtime.plan.LoadedExecutionPlan;
+import com.idea2strategy.trading.worker.TradingRuntimeRole;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -74,6 +75,9 @@ class StrategyBotOutboxPollerE2ETest {
     static void databaseProperties(DynamicPropertyRegistry registry) {
         CanonicalBaseline.migrateWithContributions(new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
+        runtimeJdbc = JdbcClient.create(TradingRuntimeRole.dataSource(
+                POSTGRES.getJdbcUrl(), new DriverManagerDataSource(
+                        POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())));
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
@@ -81,6 +85,9 @@ class StrategyBotOutboxPollerE2ETest {
 
     @Autowired
     private JdbcClient jdbc;
+
+    /** The poller and checkpoint store run as the trading role; fixtures run as the owner. */
+    private static JdbcClient runtimeJdbc;
 
     private BotControlCheckpointStore checkpoints;
     private final List<String> lifecycleEvents = new ArrayList<>();
@@ -92,7 +99,7 @@ class StrategyBotOutboxPollerE2ETest {
         jdbc.sql("delete from operations.outbox_consumer_receipts").update();
         jdbc.sql("delete from operations.outbox_messages").update();
         lifecycleEvents.clear();
-        checkpoints = new OutboxReceiptBotControlCheckpointStore(jdbc, HANDLER);
+        checkpoints = new OutboxReceiptBotControlCheckpointStore(runtimeJdbc, HANDLER);
         clock = new MutableClock(T0);
         StrategyBotControlConsumer consumer = new StrategyBotControlConsumer(
                 new StrategyBotContractCodec(),
@@ -108,7 +115,7 @@ class StrategyBotOutboxPollerE2ETest {
                         StrategyBotExecutionPlanAdapter.RUNTIME_SCHEMA_VERSION,
                         Map.of()));
         poller = new StrategyBotOutboxPoller(
-                jdbc, consumer, clock, HANDLER, "rt5-e2e-worker", 10,
+                runtimeJdbc, consumer, clock, HANDLER, "rt5-e2e-worker", 10,
                 Duration.ofSeconds(30), Duration.ofSeconds(60), 3);
     }
 

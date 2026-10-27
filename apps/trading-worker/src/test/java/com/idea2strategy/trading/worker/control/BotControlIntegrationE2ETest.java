@@ -13,6 +13,7 @@ import com.idea2strategy.trading.strategy.runtime.control.StrategyBotControlCons
 import com.idea2strategy.trading.strategy.runtime.warmup.FeatureObservation;
 import com.idea2strategy.trading.strategy.runtime.warmup.PreparedWarmup;
 import com.idea2strategy.trading.strategy.runtime.warmup.WarmupFeatureSeries;
+import com.idea2strategy.trading.worker.TradingRuntimeRole;
 import com.idea2strategy.trading.worker.runtime.EvaluatingBotRuntime;
 import java.math.BigDecimal;
 import java.nio.file.Files;
@@ -115,9 +116,14 @@ class BotControlIntegrationE2ETest {
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
         CanonicalBaseline.migrateWithContributions(dataSource);
         seed(dataSource);
+        TradingRuntimeRole.dataSource(POSTGRES.getJdbcUrl(), dataSource);
+        TradingRuntimeRole.bridgeOrderCreationGuard(dataSource);
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
-        registry.add("spring.datasource.username", POSTGRES::getUsername);
-        registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("spring.datasource.username", () -> TradingRuntimeRole.LOGIN);
+        registry.add("spring.datasource.password", () -> TradingRuntimeRole.PASSWORD);
+        // The test-only Flyway step migrates as the owner; the worker itself never migrates.
+        registry.add("spring.flyway.user", POSTGRES::getUsername);
+        registry.add("spring.flyway.password", POSTGRES::getPassword);
         registry.add("trading.warmup.bundle-root", WARMUP_ROOT::toString);
         registry.add(
                 "trading.warmup.materialization-receipt-path",
@@ -169,7 +175,11 @@ class BotControlIntegrationE2ETest {
     private EvaluatingBotRuntime runtime;
 
     @Autowired
-    private JdbcClient jdbc;
+    private JdbcClient runtimeJdbc;
+
+    /** Fixtures and assertions run as the container owner; the worker runs as the trading role. */
+    private final JdbcClient jdbc = JdbcClient.create(new DriverManagerDataSource(
+            POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
 
     /** The clock the poller leases with, so a case can let a lease lapse without waiting for one. */
     private final AdvanceableClock clock = new AdvanceableClock(POLL_AT);
@@ -188,7 +198,7 @@ class BotControlIntegrationE2ETest {
         runtime.stop(BOT, "TEST_RESET");
         clock.set(POLL_AT);
         poller = new StrategyBotOutboxPoller(
-                jdbc, consumer, clock, StrategyBotControlTransportConfiguration.HANDLER_ID,
+                runtimeJdbc, consumer, clock, StrategyBotControlTransportConfiguration.HANDLER_ID,
                 "b91-worker", 32, Duration.ofSeconds(30), Duration.ofSeconds(30), 5);
         jdbc.sql("""
                 truncate trading.order_intent_batches, trading.order_intents, trading.orders,
