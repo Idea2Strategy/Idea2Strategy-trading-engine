@@ -42,7 +42,7 @@ tasks.named("check") {
 }
 
 dependencies {
-    implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.2"))
     implementation(project(":modules:trading-common"))
     implementation(project(":modules:trading-application"))
     implementation(project(":modules:strategy-runtime"))

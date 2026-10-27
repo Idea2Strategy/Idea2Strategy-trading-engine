@@ -3,7 +3,7 @@ plugins {
 }
 
 dependencies {
-    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.0"))
+    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
